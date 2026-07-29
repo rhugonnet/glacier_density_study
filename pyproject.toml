@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[project]
+name = "glacier-density-surrogate"
+version = "0.1.0"
+description = "Surrogate model for converting glacier volume change to mass change."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  {name = "Matthias Huss"},
+  {name = "Romain Hugonnet"},
+  {name = "Johannes Marian Landmann"},
+  {name = "Daniel Farinotti"},
+]
+dependencies = [
+  "numpy",
+  "pandas",
+]
+
+[project.optional-dependencies]
+study = [
+  "cartopy",
+  "matplotlib",
+  "scipy",
+]
+test = [
+  "pytest",
+]
+
+[project.scripts]
+glacier-density-surrogate = "glacier_density_surrogate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["glacier_density_surrogate*"]
+
+
+[tool.setuptools.package-data]
+glacier_density_surrogate = ["parameters/*.json"]

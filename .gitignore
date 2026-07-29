@@ -1,0 +1,59 @@
+# Local agent and editor state
+.agents/
+.codex/
+.idea/
+
+# Archived exploratory work
+archived/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python build and package artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments and local env files
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+
+# Jupyter and IPython
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# Type checker and language server outputs
+.dmypy.json
+dmypy.json
+pyrightconfig.json.bak
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+~$*
+
+# OS metadata
+.DS_Store
+Thumbs.db
