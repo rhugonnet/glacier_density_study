@@ -212,7 +212,7 @@ def write_latex(table: pd.DataFrame, path: Path) -> None:
     lines = [
         r"\begin{table}",
         r"\centering",
-        r"\caption{Agreement between surrogate and full-model effective-density estimates by elevation-change ($|\Delta h|$) and period-length ($\Delta t$) classes. Variance and bias are volume-change-weighted; CI hits are the percentage of 95\% confidence intervals intersecting the full-model value. Note that shorter periods and smaller elevation change both have larger biases, but that those remain small relative to associated uncertainties.}",
+        r"\caption{Agreement between surrogate and full model effective density estimates by elevation change ($|\Delta h|$) and period length ($\Delta t$) classes. Variance and bias are volume change weighted; CI hits are the percentage of 95\% confidence intervals intersecting the full model value. Note that shorter periods and smaller elevation change both have larger biases, but that those remain small relative to associated uncertainties.}",
         r"\label{tab:closed-agreement-categories}",
         r"\begin{tabular}{lllrrrr}",
         r"\hline",

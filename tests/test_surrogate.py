@@ -263,10 +263,57 @@ def test_temporal_closure_preserves_additive_mass_change() -> None:
     )
 
     out = model.predict_timeseries(data, expand_periods=True)
-    annual = out.loc[np.isclose(out["period_years"], 1.0), "dM_closed_kg"].sum()
-    full = out.loc[(out["start"] == 2000) & (out["end"] == 2003), "dM_closed_kg"].iloc[0]
+    annual = out.loc[np.isclose(out["period_years"], 1.0), "dM_kg"].sum()
+    full = out.loc[(out["start"] == 2000) & (out["end"] == 2003), "dM_kg"].iloc[0]
 
     assert math.isclose(annual, full, rel_tol=1.0e-12)
+    assert "mu_rho_independent_kg_m3" not in out.columns
+    assert "mu_rho_closed_kg_m3" not in out.columns
+    assert "temporally_closed" not in out.columns
+
+    components = model.predict_timeseries(data, expand_periods=True, return_components=True)
+    np.testing.assert_allclose(components["mu_rho_kg_m3"], components["mu_rho_closed_kg_m3"])
+    assert "mu_rho_independent_kg_m3" in components.columns
+
+
+def test_disconnected_period_rows_are_not_temporally_reconciled() -> None:
+    model = RhoSurrogate()
+    data = pd.DataFrame(
+        {
+            "start": [2000, 2010],
+            "end": [2005, 2015],
+            "dh_m": [-2.0, -3.0],
+            "sigma_dh_m": [0.2, 0.2],
+            "area_m2": [1.0e6, 1.0e6],
+        }
+    )
+
+    out = model.predict_timeseries(data, return_components=True)
+
+    assert not out["temporally_closed"].any()
+    np.testing.assert_allclose(out["mu_rho_kg_m3"], out["mu_rho_independent_kg_m3"])
+    np.testing.assert_allclose(out["dM_kg"], out["dM_independent_kg"])
+
+
+def test_timeseries_without_area_hides_mass_outputs() -> None:
+    model = RhoSurrogate()
+    data = pd.DataFrame(
+        {
+            "start": [2000, 2001],
+            "end": [2001, 2002],
+            "dh_m": [-0.5, -0.4],
+            "sigma_dh_m": [0.1, 0.1],
+        }
+    )
+
+    out = model.predict_timeseries(data)
+
+    assert "mu_rho_kg_m3" in out.columns
+    assert "sigma_rho_kg_m3" in out.columns
+    assert "area_m2" not in out.columns
+    assert "dV_m3" not in out.columns
+    assert "dM_kg" not in out.columns
+    assert "sigma_dM_rho_kg" not in out.columns
 
 
 def test_temporal_closure_uses_path_length_weights() -> None:

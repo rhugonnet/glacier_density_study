@@ -672,7 +672,6 @@ class RhoSurrogate:
             "sigma_past_dh_m": float(sigma_past_dh),
             "mu_rho_kg_m3": float(mu),
             "sigma_rho_kg_m3": float(sigma),
-            "temporally_closed": False,
         }
         if area_m2 is not None:
             dV = float(area_m2) * dh
@@ -703,6 +702,7 @@ class RhoSurrogate:
         past_missing: str = "current",
         past_error_factor: float = 2.0,
         dh_error_corr: Callable[[np.ndarray], np.ndarray] | None = None,
+        return_components: bool = False,
     ) -> pd.DataFrame:
         """Predict effective density for an elevation-change time series
 
@@ -720,7 +720,12 @@ class RhoSurrogate:
         :param past_missing: Assumption if no past period exists
         :param past_error_factor: Multiplier for default past uncertainty
         :param dh_error_corr: Correlation function for elevation-change errors
+        :param return_components: Include internal direct and reconciled columns
         """
+        has_area = area_m2 is not None
+        if not has_area:
+            area_names = ["area_m2", "area", "glacier_area_m2"]
+            has_area = area_col is not None or _first_existing(data.columns, area_names, required=False) is not None
         table = self._prepare_input_table(
             data,
             start_col=start_col,
@@ -756,13 +761,18 @@ class RhoSurrogate:
         out["dV_m3"] = out["area_m2"] * out["dh_m"]
         out["dM_independent_kg"] = out["mu_rho_independent_kg_m3"] * out["dV_m3"]
         out["sigma_dM_rho_independent_kg"] = out["sigma_rho_independent_kg_m3"] * np.abs(out["dV_m3"])
-        if len(out) > 1 and {"start", "end"}.issubset(out.columns):
+        if self._can_temporally_reconcile(out):
             out = self._temporal_closure(out)
         else:
             out["mu_rho_closed_kg_m3"] = out["mu_rho_independent_kg_m3"]
             out["sigma_rho_closed_kg_m3"] = out["sigma_rho_independent_kg_m3"]
             out["dM_closed_kg"] = out["dM_independent_kg"]
+            out["sigma_dM_rho_closed_kg"] = out["sigma_dM_rho_independent_kg"]
             out["temporally_closed"] = False
+        out["mu_rho_kg_m3"] = out["mu_rho_closed_kg_m3"]
+        out["sigma_rho_kg_m3"] = out["sigma_rho_closed_kg_m3"]
+        out["dM_kg"] = out["dM_closed_kg"]
+        out["sigma_dM_rho_kg"] = out["sigma_dM_rho_closed_kg"]
         keep = [
             "start",
             "end",
@@ -771,16 +781,25 @@ class RhoSurrogate:
             "sigma_dh_m",
             "past_dh_m",
             "sigma_past_dh_m",
-            "area_m2",
-            "mu_rho_closed_kg_m3",
-            "sigma_rho_closed_kg_m3",
-            "dV_m3",
-            "dM_closed_kg",
-            "mu_rho_independent_kg_m3",
-            "sigma_rho_independent_kg_m3",
-            "dM_independent_kg",
-            "temporally_closed",
+            "mu_rho_kg_m3",
+            "sigma_rho_kg_m3",
         ]
+        if has_area:
+            keep.extend(["area_m2", "dV_m3", "dM_kg", "sigma_dM_rho_kg"])
+        if return_components:
+            keep.extend(
+                [
+                    "mu_rho_closed_kg_m3",
+                    "sigma_rho_closed_kg_m3",
+                    "dM_closed_kg",
+                    "sigma_dM_rho_closed_kg",
+                    "mu_rho_independent_kg_m3",
+                    "sigma_rho_independent_kg_m3",
+                    "dM_independent_kg",
+                    "sigma_dM_rho_independent_kg",
+                    "temporally_closed",
+                ]
+            )
         return out[[c for c in keep if c in out.columns]].copy()
 
     def _prepare_input_table(
@@ -843,6 +862,20 @@ class RhoSurrogate:
         if len(ordered) <= 1:
             return False
         return bool(np.allclose(ordered["start"].to_numpy(float)[1:], ordered["end"].to_numpy(float)[:-1]))
+
+    def _can_temporally_reconcile(self, table: pd.DataFrame) -> bool:
+        """Return whether period rows define one supported time series."""
+        if len(table) <= 1 or not {"start", "end"}.issubset(table.columns):
+            return False
+        intervals = table[["start", "end"]].drop_duplicates().to_numpy(float)
+        bounds = np.array(sorted(set(intervals[:, 0]).union(set(intervals[:, 1]))), dtype=float)
+        if len(bounds) <= 2:
+            return False
+        for start, end in zip(bounds[:-1], bounds[1:]):
+            covered = np.any((intervals[:, 0] <= start) & (intervals[:, 1] >= end))
+            if not covered:
+                return False
+        return True
 
     def _expand_period_table(self, table: pd.DataFrame, corr: Callable[[np.ndarray], np.ndarray]) -> pd.DataFrame:
         """Expand consecutive elementary periods to all contiguous periods."""
@@ -977,6 +1010,7 @@ class RhoSurrogate:
             out["mu_rho_closed_kg_m3"] = out["mu_rho_independent_kg_m3"]
             out["sigma_rho_closed_kg_m3"] = out["sigma_rho_independent_kg_m3"]
             out["dM_closed_kg"] = out["dM_independent_kg"]
+            out["sigma_dM_rho_closed_kg"] = out["sigma_dM_rho_independent_kg"]
             out["temporally_closed"] = False
             return out
         S = np.zeros((len(out), n_elem), dtype=float)

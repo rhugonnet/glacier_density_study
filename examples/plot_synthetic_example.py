@@ -43,22 +43,15 @@ def main() -> None:
     ax_rho.axhline(model.rho_ice, color="0.4", lw=0.9, ls="--")
     ax_rho.plot(
         annual["mid_year"],
-        annual["mu_rho_independent_kg_m3"],
-        color="#4C78A8",
-        marker="o",
-        label="Without temporal reconciliation",
-    )
-    ax_rho.plot(
-        annual["mid_year"],
-        annual["mu_rho_closed_kg_m3"],
+        annual["mu_rho_kg_m3"],
         color="#F58518",
         marker="o",
-        label="With temporal reconciliation",
+        label="Surrogate",
     )
     ax_rho.fill_between(
         annual["mid_year"],
-        annual["mu_rho_closed_kg_m3"] - annual["sigma_rho_closed_kg_m3"],
-        annual["mu_rho_closed_kg_m3"] + annual["sigma_rho_closed_kg_m3"],
+        annual["mu_rho_kg_m3"] - annual["sigma_rho_kg_m3"],
+        annual["mu_rho_kg_m3"] + annual["sigma_rho_kg_m3"],
         color="#F58518",
         alpha=0.18,
         linewidth=0,
