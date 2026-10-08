@@ -53,7 +53,7 @@ The package applies the surrogate model formulation as described in the **"Pract
 
 ### Setup surrogate environment
 
-Install directly from the GitHub repo (requires Python 3.10+ and Git):
+Install directly with (requires Python 3.10+ and Git):
 
 ```sh
 pip install git+https://github.com/rhugonnet/glacier_density_study.git
@@ -218,7 +218,7 @@ For advanced use, model functions can also be called directly:
 
 ### In-depth example
 
-[The figure at the top](examples/figures/surrogate_illustration.png) uses synthetic 2000–2020 elevation changes for four Everest glaciers. Their outlines and areas come from the [RGI Consortium (2017), Randolph Glacier Inventory 6.0](https://www.glims.org/RGI/randolph60.html).
+The following example allows to produce [the figure at the top](examples/figures/surrogate_illustration.png), predicting effective density and mass changes for synthetic 2000–2020 elevation changes at four Everest glaciers. Their outlines and areas come from the [RGI Consortium (2017), Randolph Glacier Inventory 6.0](https://www.glims.org/RGI/randolph60.html).
 
 #### 1. Time series: elevation change to effective density
 
