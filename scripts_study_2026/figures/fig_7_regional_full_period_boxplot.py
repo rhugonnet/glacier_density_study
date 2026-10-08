@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main figure 7: full-period regional distributions of effective density."""
+"""Main figure 7: regional distributions of effective density."""
 
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ class HandlerReferenceBand(HandlerBase):
 
 
 def read_full_period_rows() -> pd.DataFrame:
-    """Read reference-variant full-period rows from the full-model table."""
+    """Read reference-variant full-period rows from the full model table."""
     header = pd.read_csv(INPUT_CSV, nrows=0).columns
     rgi_col = first_existing(header, ["rgiid", "RGIId", "RGIId_float"])
     rho_col = first_existing(header, ["rho"])

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Concatenate full-model effective-density outputs for iteration9, sensmin and sensmax.
+Convert the full model outputs for iteration9, sensmin and sensmax into dataframes.
 
-For each input scenario, reads the same regional/glacier .dat structure as the
-original script, computes all 1- to 20-year period combinations, adds metadata,
-and appends a `rho_variant` column identifying the source scenario.
+For each input scenario, we read the original .dat structure, compute all 1- to 20-year period combinations,
+add metadata, and append a `rho_variant` column identifying the source scenario.
 """
 
 import os

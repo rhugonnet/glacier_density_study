@@ -1,8 +1,4 @@
-"""Project paths for the 2026 manuscript scripts.
-
-These paths are intentionally kept outside ``glacier_density_surrogate`` so the
-installable surrogate package stays reusable for external datasets.
-"""
+"""Project paths for the 2026 manuscript scripts."""
 
 from __future__ import annotations
 
@@ -47,5 +43,5 @@ TEMPORAL_PARAM_PATH = (
     / "rho_error_correlation_standardized_residuals_directcorr_constantspace_temporaldiagnostic_temporal_fit_parameters.csv"
 )
 
-# Define the full-model table used by manuscript diagnostics
+# Define the full model table used by manuscript diagnostics
 INPUT_CSV = DATA_DIR / "rho_dV_may26_final_iteration9_sensmin_sensmax.csv"

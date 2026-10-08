@@ -82,7 +82,7 @@ def _axis_to_rho(value: np.ndarray | float) -> np.ndarray | float:
 
 
 def read_full_model_table(region: int = REGION) -> pd.DataFrame:
-    """Read reference full-model rows for one RGI region."""
+    """Read reference full model rows for one RGI region."""
     header = pd.read_csv(INPUT_CSV, nrows=0).columns
     rgi_col = _first_existing(header, ["rgiid", "RGIId", "RGIId_float"])
     rho_col = _first_existing(header, ["rho"])
@@ -169,9 +169,9 @@ def complete_region_subset(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
 
 
 def past_elevation_change_from_wide(annual_wide: pd.DataFrame, start: int, model: RhoSurrogate) -> pd.Series:
-    """Compute the exponentially weighted past-elevation-change predictor."""
-    tau_years = float(model.params.get("T_p", 5.0))
-    tau_max = int(round(float(model.params.get("tau_max", 20.0))))
+    """Compute the exponentially weighted past elevation change rate."""
+    tau_years = float(model.params["memory_tau_years"])
+    tau_max = int(round(float(model.params["tau_max"])))
     lags = [lag for lag in range(1, tau_max + 1) if (start - lag) in annual_wide.columns]
     if not lags:
         return pd.Series(0.0, index=annual_wide.index)
@@ -227,7 +227,7 @@ def apply_surrogate_and_closure(annual: pd.DataFrame, periods: pd.DataFrame, mod
 
 
 def annual_spatial_mass_sigma(periods: pd.DataFrame, model: RhoSurrogate, sigma_col: str) -> dict[float, float]:
-    """Propagate spatially correlated mass uncertainty for annual regional estimates."""
+    """Propagate spatially correlated mass change uncertainty for annual regional estimates."""
     required = {"rgiid", "lat", "lon", "start_date", sigma_col}
     if not required.issubset(periods.columns):
         return {}
@@ -268,7 +268,7 @@ def annual_spatial_mass_sigma(periods: pd.DataFrame, model: RhoSurrogate, sigma_
 
 
 def regional_annual_summary(periods: pd.DataFrame, model: RhoSurrogate | None = None) -> pd.DataFrame:
-    """Aggregate annual full-model and surrogate estimates over the plotted RGI region."""
+    """Aggregate annual full model and surrogate estimates over the plotted RGI region."""
     annual = periods.loc[np.isclose(periods["period_years"], 1.0)].copy()
     spatial_sigma = annual_spatial_mass_sigma(annual, model, "sigma_dM_rho_surrogate_kg") if model is not None else {}
     rows = []
@@ -350,7 +350,7 @@ def make_synthetic_series(
     interannual_sd: float = INTERANNUAL_SD,
     uncertainty_fraction: float = UNCERTAINTY_FRACTION,
 ) -> pd.DataFrame:
-    """Build the previous synthetic series, retained for manuscript-value compatibility."""
+    """Build the previous synthetic series, retained for manuscript value compatibility."""
     rng = np.random.default_rng(seed)
     pos = np.maximum(rng.normal(pos_mean, interannual_sd, positive_years), 0.03)
     neg = np.minimum(rng.normal(neg_mean, interannual_sd, n_years - positive_years), -0.03)
@@ -387,7 +387,7 @@ def temporal_reconcile(periods: pd.DataFrame, n_elem: int, model: RhoSurrogate) 
     elem = periods.loc[np.isclose(periods["dt_yr"], 1.0)].sort_values("i0")
     elem_abs_dh = elem["dh_obs_m"].abs().to_numpy(float)
     period_dt = periods["dt_yr"].to_numpy(float)
-    sigma_support = float(model.params["U_h"]) ** 2 * (S @ elem_abs_dh) + float(model.params["U_t"]) ** 2 * period_dt
+    sigma_support = float(model.params["A0"]) ** 2 * (S @ elem_abs_dh) + float(model.params["A1"]) ** 2 * period_dt
     sigma = AREA_KM2 * 1e6 * np.sqrt(np.maximum(sigma_support, 0.0))
     floor = np.nanmedian(sigma[np.isfinite(sigma) & (sigma > 0)]) * 1.0e-3
     sigma = np.where(np.isfinite(sigma) & (sigma > 0), np.maximum(sigma, floor), floor)

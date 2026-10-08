@@ -160,7 +160,7 @@ def plot_weighted_hist_with_normal(ax, values: np.ndarray, weights: np.ndarray, 
     if len(v_rob) == 0:
         return
     bins = np.linspace(q_lo, q_hi, 45)
-    ax.hist(v_rob, bins=bins, weights=w_rob, density=True, alpha=0.55, edgecolor="none", label="Volume-weighted\nhistogram")
+    ax.hist(v_rob, bins=bins, weights=w_rob, density=True, alpha=0.55, edgecolor="none", label="Volume change weighted\nhistogram")
     if np.isfinite(mu) and np.isfinite(sd) and sd > 0:
         xx = np.linspace(q_lo, q_hi, 500)
         ax.plot(xx, stats.norm.pdf(xx, loc=mu, scale=sd), lw=2.0, label="Normal fit")
@@ -226,7 +226,7 @@ stages = [
 
 # Plot distribution and Q-Q rows
 fig, axes = plt.subplots(3, 2, figsize=(10.0, 10.4), constrained_layout=True)
-axes[0, 0].set_title("Normal fit to volume-weighted distribution")
+axes[0, 0].set_title("Normal fit to volume change weighted distribution")
 axes[0, 1].set_title("Q-Q plot")
 letters = iter(list("abcdef"))
 for i, (col, xlabel, row_label) in enumerate(stages):

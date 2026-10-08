@@ -1,24 +1,14 @@
 #!/usr/bin/env python3
 """
-Master diagnostics for the effective-density surrogate mean and uncertainty model.
+Main fitting script for the effective density surrogate mean and uncertainty model.
 
-Main capabilities
------------------
-1. Fit alternative functional forms for the five identified components:
-   - finite past-elevation-change contrast
-   - signed ratio / near-zero term
-   - damping toward rho_ice
-   - period-length correction
-   - period-independent even current-dh curvature
-2. Compare models with and without period correction.
-3. Plot before/after diagnostics:
-   before = raw rho, after = rho - rho_fit.
-4. Diagnose residual dependence on alternative past-elevation-change windows and
-   rates.
-5. Optionally profile/refit the whole model for several fixed or exponential
-   cumulative past-elevation-change definitions.
+The final setup is activated, but many other parametrizations were explored and tested.
 
-The script prioritizes reproducible study diagnostics over runtime.
+Notably, we tested many functional forms for the five mean components, all archived here (which is why the script is
+massive...). We kept only the final best performing form with the least parameters (most parsimonious).
+
+For the final fit, we run the optimization directly on with the final "past elevation change rate" definition of an exponentially weighted
+annual rate, which requires some computation time (previously called "memory" model below).
 """
 
 from __future__ import annotations
@@ -88,10 +78,9 @@ SIGNED_DH_MODE = "b_over_rho"
 WEIGHT_MODE = "volume_from_row_rho_no_dt"
 DIVIDE_WEIGHT_BY_N_VARIANTS_PER_PERIOD = True
 
-# Mean-model fitting uses binned, volume-change-weighted effective densities as
-# targets. This option changes only the weight of each target cell in the
-# least-squares fit. The selected final form uses inverse variance weighting
-# based on the retained analytical uncertainty function.
+# Mean model fitting uses binned volume change weighted effective densities as targets.
+# This option changes the weight of each target cell in the least-squares fit to do sensitivity checks
+# We use the natural weight in the end (inverse variance)
 MEAN_FIT_WEIGHT_MODE = "volume_over_sigma2"
 MEAN_FIT_SIGMA_U_H = 94.97725542634642
 MEAN_FIT_SIGMA_U_T = 104.6354337888041
@@ -148,7 +137,7 @@ MEMORY_PROFILE_FIXED_WINDOWS = list(range(1, 16))
 RUN_EXP_MEMORY_PROFILE = False
 MEMORY_PROFILE_EXP_TAUS = [0.5, 1, 1.5, 2, 3, 4, 5, 7, 10, 15]
 
-# Configure joint comparison of past-elevation-change kernels
+# Configure joint comparison of past elevation change rate kernels
 # Optimize one timescale per kernel with the same annual lag matrix
 RUN_JOINT_KERNEL_MEMORY_FIT = True
 USE_JOINT_EXPONENTIAL_MEMORY_FOR_DIAGNOSTICS = True
@@ -228,6 +217,7 @@ FINAL_MEAN_MODEL_SPEC = dict(
     current="constant",
 )
 
+# Old candidate models
 CANDIDATE_MODELS = [
     dict(name="m34_param_period", memory="logistic_sqrt", ratio="tanh_power", damping="exp_stretched", period="exp_param", current="constant"),
     dict(name="no_period", memory="logistic_sqrt", ratio="tanh_power", damping="exp_stretched", period="none", current="rational_power"),
@@ -344,7 +334,7 @@ WRITE_FIT_DIAGNOSTIC_PLOTS = False
 MAIN_MEAN_LEFT_MIN_ABS_DH_DISPLAY = 1.0
 MAIN_MEAN_DYNAMIC_Y_MIN_PAD = 25.0
 
-# Optional temporal-closure diagnostic for sigma_rho
+# Optional temporal closure diagnostic for sigma_rho
 # This tests whether replacing net |dh| by the cumulative absolute path length
 # Use L_A = sum_i |dh_i| for nested-period uncertainty consistency
 RUN_PATH_LENGTH_SIGMA_DIAGNOSTIC = False
@@ -829,7 +819,7 @@ def sigma_model_form(theta_sig, absx, period_years=None, form="rational_floor", 
 
     Some candidate forms intentionally diverge as |dh| approaches zero. This is
     consistent with the ratio nature of rho_dV; the singularity is handled later
-    when propagating over the elevation-change uncertainty distribution.
+    when propagating over the elevation change uncertainty distribution.
     """
     absx = np.asarray(absx, dtype=float)
     if param_names is None:
@@ -1461,7 +1451,7 @@ def _fit_one_sigma_form(tab, form):
 
 def attach_path_length_from_subperiods(current_rows, all_rows, out_col="path_abs_dh"):
     """
-    Attach cumulative absolute elevation-change path length L_A for each row.
+    Attach cumulative absolute elevation change path length L_A for each row.
 
     L_A is computed from nested source-period rows, by default annual rows:
         L_A = sum_i |dh_i|
@@ -2459,9 +2449,9 @@ def attach_exact_past_window(current_rows, all_rows, window_years, out_col=None)
 
 def attach_exp_cumulative_memory(current_rows, all_rows, tau, kmax, out_col):
     """
-    Attach exponentially weighted past elevation change.
+    Attach exponentially weighted past elevation change rate.
 
-    The joint-kernel fit uses normalized kernel weights. The diagnostic past-change
+    The joint-kernel fit uses normalized kernel weights. The diagnostic past elevation change rate
     column uses the same normalization and accepts partial annual lag histories
     so that all period lengths retain sufficient support.
     """
@@ -2841,7 +2831,7 @@ def mean_fit_sigma_from_target(target):
 def attach_mean_fit_weights(target):
     """Add the least-squares weights used to fit the mean function.
 
-    ``weight_sum`` remains the physical volume-change support used to estimate
+    ``weight_sum`` remains the physical volume change support used to estimate
     each binned mean. ``mean_fit_weight_sum`` is only the optimizer weight for
     matching these binned means.
     """
@@ -2921,7 +2911,7 @@ def summarize_target_prediction_by_period_dh_bin(
     """
     Summarize target-cell prediction errors by period length and dh bin.
 
-    :param target: Binned full-model target table with attached predictions.
+    :param target: Binned full model target table with attached predictions.
     :param model: Name of fitted model whose ``rho_pred_*`` column is used.
     :param fit_weight_column: Weight column used for the summary.
     :param signed: If True, bin signed current dh; otherwise bin |current dh|.
@@ -3470,7 +3460,7 @@ def _plot_mean_fit_pair(plot_df, out_png, title, x_label, color_label, signed_x=
 def plot_mean_fit_by_model(target, summary):
     """
     For each fitted candidate model, plot observed target-bin means and fitted values:
-      1. current dh vs rho, colored by past elevation change;
+      1. current dh vs rho, colored by past elevation change rate;
       2. current dh vs rho, colored by period length.
     """
     out_mean_fit_dir.mkdir(parents=True, exist_ok=True)
@@ -3488,9 +3478,9 @@ def plot_mean_fit_by_model(target, summary):
         _plot_mean_fit_pair(
             by_memory,
             out_mean_fit_dir / f"{safe}_mean_fit_currentdh_colored_by_memorydh.png",
-            title=f"Mean fit: current dh colored by past elevation change ({model})",
+            title=f"Mean fit: current dh colored by past elevation change rate ({model})",
             x_label="Current signed dh (m)",
-            color_label="Past elevation change (m)",
+            color_label="Past elevation change rate (m yr$^{-1}$)",
             signed_x=True,
         )
 
@@ -3990,7 +3980,7 @@ def plot_memory_scan(summary, score, out_png, out_score_png, predictor_kind):
         sub=summary.loc[(summary["memory_window_years"]==W)&(summary["support_ok"])].sort_values("memory_bin")
         if len(sub)<3: continue
         x=sub["memory_center_w"].to_numpy(float); y=sub["resid_mean_w"].to_numpy(float); vals.append(y[np.isfinite(y)]); ax.plot(x,y,marker="o",lw=1.2,ms=3.5,color=cmap(norm(W)))
-    ax.axhline(0,color="black",lw=1); ax.axvline(0,color="black",lw=1); ax.set_xlabel("Cumulative past-window dh (m)" if predictor_kind=="cumulative" else "Mean past-window dh rate (m yr$^{-1}$)"); ax.set_ylabel("Weighted mean residual"); ax.set_title(f"Residual dependency on {predictor_kind} memory windows"); ax.grid(alpha=0.25)
+    ax.axhline(0,color="black",lw=1); ax.axvline(0,color="black",lw=1); ax.set_xlabel("Cumulative elevation change over earlier window (m)" if predictor_kind=="cumulative" else "Past elevation change rate over window (m yr$^{-1}$)"); ax.set_ylabel("Weighted mean residual"); ax.set_title(f"Residual dependency on {predictor_kind} memory windows"); ax.grid(alpha=0.25)
     if vals: ax.set_ylim(*robust_symmetric_ylim(np.concatenate(vals),min_halfspan=20))
     fig.colorbar(sm,ax=ax).set_label("Memory window length (yr)"); fig.savefig(out_png,dpi=DPI,bbox_inches="tight"); plt.close(fig)
     if not score.empty:
@@ -4061,8 +4051,8 @@ def _pick_representative_memory_groups(values, targets=None):
 
 def _format_memory_label(v):
     if abs(v) >= 1:
-        return f"{int(np.round(v))} m"
-    return f"{v:g} m"
+        return f"{int(np.round(v))} m yr-1"
+    return f"{v:g} m yr-1"
 
 def _format_period_label(v):
     return f"{int(round(v))} yr" if np.isfinite(v) else "NA"
@@ -4265,7 +4255,7 @@ def _weighted_period_distribution_from_target(target):
 
 def _dense_mean_curve_memory(fit_obj, xgrid, memory_value, period_values, period_weights):
     """
-    Dense mean-model curve for a fixed past elevation change, averaged over the empirical
+    Dense mean model curve for a fixed past elevation change rate, averaged over the empirical
     period distribution.
     """
     y = np.zeros_like(xgrid, dtype=float)
@@ -4765,7 +4755,7 @@ def _dense_mean_fit_for_group(fit_obj, plot_sub, xgrid):
 
     Uses the actual fitted predictor values represented by the plotted group:
       - current dh varies over dense xgrid;
-      - past elevation change is fixed to the support-weighted group center;
+      - past elevation change rate is fixed to the support-weighted group center;
       - period is fixed to the support-weighted group-period center.
 
     This is not a support-weighted average of fitted output values and is not an
@@ -4805,7 +4795,7 @@ def _memory_distribution_for_period_group(d_pred, memory_col, period_value):
     Representative memory values for an analytical period-correction curve.
 
     This is only for displaying the analytical correction line. It avoids
-    volume-change-weighting of fitted output values; the curve is an unweighted
+    volume change weighting of fitted output values; the curve is an unweighted
     average over representative memory states within the displayed period group.
     """
     if d_pred is None or len(d_pred) == 0 or memory_col not in d_pred.columns:
@@ -5020,7 +5010,7 @@ def _plot_signed_anchor_line(ax, x_anchor, y_anchor, color, lw=2.0, alpha=0.95):
 def _plot_mean_model_from_anchors(ax, x_anchor, y_anchor, color, xgrid, min_abs=None,
                                   mode="smooth_binned", lw=2.0, alpha=0.95):
     """
-    Plot the main-paper mean-model line using the same fitted quantities as the
+    Plot the main-paper mean model line using the same fitted quantities as the
     diagnostic mean-fit plot.
 
     mode='binned' draws the fitted model at displayed bin centers.
@@ -5303,7 +5293,7 @@ def _neutral_memory_mean_panel_table(d_pred, fit_obj, selected_model=None):
         rho_mem0 = rho - memory_component - ratio_component
                  = rho_ice + R(dh) [P_t(dt) + C_h(dh)] + residual.
 
-    This avoids requiring observations with past elevation change close to zero.
+    This avoids requiring observations with past elevation change rate close to zero.
     """
     required = [
         "signed_dh", "period_plot_years", "period_years", "rho_raw",
@@ -5428,7 +5418,7 @@ def _robust_normality_sample(values, weights, qlo=0.005, qhi=0.995):
 
 def _normality_metrics(values, weights):
     # Mean, standard deviation and excess kurtosis use the full
-    # Volume-change-weighted distribution. Skewness is reported as Bowley
+    # Volume change weighted distribution. Skewness is reported as Bowley
     # Quantile skewness to avoid domination by a few extreme outliers
     mu = weighted_mean(values, weights)
     sd = weighted_std(values, weights)
@@ -5443,7 +5433,7 @@ def _plot_weighted_hist_with_normal(ax, values, weights, x_label, row_label, sho
     if len(v_rob) == 0:
         return
     bins = np.linspace(q_lo, q_hi, 45)
-    ax.hist(v_rob, bins=bins, weights=w_rob, density=True, alpha=0.55, edgecolor='none', label='Volume-weighted\nhistogram')
+    ax.hist(v_rob, bins=bins, weights=w_rob, density=True, alpha=0.55, edgecolor='none', label='Volume change weighted\nhistogram')
     if np.isfinite(mu) and np.isfinite(sd) and sd > 0:
         xx = np.linspace(q_lo, q_hi, 500)
         ax.plot(xx, stats.norm.pdf(xx, loc=mu, scale=sd), lw=2.0, label='Normal fit')
@@ -5498,7 +5488,7 @@ def plot_supp_normality_figure(d_pred, out_png):
         ('z_after', r'Standardized residual $z_{\rho}$', r'After standardizing by $\mu_{\rho}$ and $\sigma_{\rho}$'),
     ]
     fig, axes = plt.subplots(3, 2, figsize=(10.0, 10.4), constrained_layout=True)
-    axes[0, 0].set_title('Normal fit to volume-weighted distribution')
+    axes[0, 0].set_title('Normal fit to volume change weighted distribution')
     axes[0, 1].set_title('Q-Q plot')
     letters = iter(list('abcdef'))
     for i, (col, xlab, rowlab) in enumerate(stages):
@@ -5517,7 +5507,7 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
     Panel a: simplified neutral-memory mean mu(dh, dh_mem=0, dt), colored by
     period length. This is the user-facing baseline dependence.
 
-    Panel b: full mean model at a fixed 5-year period, colored by past elevation change.
+    Panel b: full mean model at a fixed 5-year period, colored by past elevation change rate.
     This shows the additional antecedent-state dependence.
 
     model_line_mode='analytical' draws the continuous fitted function along a
@@ -5532,8 +5522,8 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
     xgrid = _main_dense_signed_support()
 
     # ------------------------------------------------------------------
-    # Panel a: simplified mean for neutral past elevation change = 0, colored by period
-    # Use all data transformed to equivalent past elevation change = 0
+    # Panel a: simplified mean for neutral past elevation change rate = 0, colored by period
+    # Use all data transformed to equivalent past elevation change rate = 0
     # ------------------------------------------------------------------
     neutral_tab = _neutral_memory_mean_panel_table(d_pred, fit_obj, selected_model)
     neutral_tab.to_csv(out_plot_dir / f"{run_label}_{main_suffix}_main_neutral_memory_mean_panel_summary.csv", index=False)
@@ -5572,8 +5562,8 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
                 axes[0].scatter(xobs, yobs, s=24, color=col, alpha=0.75, edgecolors="none")
 
                 if model_line_mode == "analytical":
-                    # Continuous fitted function for the neutral-past panel
-                    # Here dh_p = 0 exactly, so the quotient-like past term is zero
+                    # Continuous fitted function for the panel with zero past elevation change rate
+                    # Here dh_p = 0 exactly, so the quotient-like past elevation change rate term is zero
                     # And the function is finite as dh approaches zero
                     xfit = xgrid.copy()
                     yfit_plot = rho_model(
@@ -5623,7 +5613,7 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
             axes[0].legend(handles=_main_style_legend_handles(), frameon=False, fontsize=10, loc="lower right")
 
     # ------------------------------------------------------------------
-    # Panel b: full mean at dt = 5 yr, colored by past elevation change
+    # Panel b: full mean at dt = 5 yr, colored by past elevation change rate
     # IMPORTANT: this panel is intentionally restricted to the 5-year
     # Period slice; mixing periods here makes the displayed binned estimates
     # Inconsistent with any single analytical model curve
@@ -5689,7 +5679,7 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
             yfit_anchor = sub["rho_pred_w"].to_numpy(float)
 
             if model_line_mode == "analytical":
-                # Continuous fitted function for the displayed past-dh group
+                # Continuous fitted function for the displayed past elevation change rate group
                 # At the fixed 5-year slice used by panel b
                 period_val = 5.0
                 xfit = xgrid.copy()
@@ -5721,7 +5711,7 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
         _set_compact_linear_y_limits(axes[1], y_for_limits, include_ice=True)
         axes[1].set_xlabel("Current dh (m)")
         axes[1].set_ylabel(r"Mean $\rho_{\Delta V}$ (kg m$^{-3}$)")
-        axes[1].set_title(r"Additional past-change dependence (5-year period)")
+        axes[1].set_title(r"Additional past elevation change rate dependence (5-year period)")
         axes[1].grid(alpha=0.25)
 
         color_handles = [
@@ -5729,7 +5719,7 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
                    label=_format_memory_label(float(lbl)))
             for lbl in label_vals
         ]
-        leg1 = axes[1].legend(handles=color_handles, title="Past dh", frameon=False, fontsize=8,
+        leg1 = axes[1].legend(handles=color_handles, title="Past elevation change rate", frameon=False, fontsize=8,
                               title_fontsize=9, loc="upper left", ncol=1)
         axes[1].add_artist(leg1)
         axes[1].legend(handles=_main_style_legend_handles(), frameon=False, fontsize=10, loc="lower right")
@@ -5864,12 +5854,12 @@ def _plot_supp_panel(ax, suball, ycol, periods, x_label, y_label, title,
 
 
 def plot_supp_rho_mean_figure(diag, out_png):
-    """Supplementary mean diagnostics for current change, past change, and area."""
+    """Supplementary mean diagnostics for current change, past elevation change rate, and area."""
     diag = diag.copy()
     diag["factor"] = diag["factor"].replace({"Model memory dh": "Past elevation change"})
     specs = [
         ("Current signed dh", "Current dh", "Current dh (m)", True, False),
-        ("Past elevation change", "Past elevation change", "Past elevation change (m)", True, False),
+        ("Past elevation change", "Past elevation change rate", "Past elevation change rate (m yr$^{-1}$)", True, False),
         ("Area", "Area", "Area", False, True),
     ]
     d = diag.loc[diag["factor"].isin([sp[0] for sp in specs])].copy()
@@ -5920,7 +5910,7 @@ def plot_supp_rho_std_figure(diag, out_png):
     diag["factor"] = diag["factor"].replace({"Model memory dh": "Past elevation change"})
     specs = [
         ("Current signed dh", "Current dh", "Current dh (m)", True, False),
-        ("Past elevation change", "Past elevation change", "Past elevation change (m)", True, False),
+        ("Past elevation change", "Past elevation change rate", "Past elevation change rate (m yr$^{-1}$)", True, False),
         ("Area", "Area", "Area", False, True),
     ]
     d = diag.loc[diag["factor"].isin([sp[0] for sp in specs])].copy()
@@ -6361,19 +6351,19 @@ def run_main_analysis(all_rows, memory_mode=None, memory_window=None, memory_tau
 
         plot_before_after_factor(diag, "Current signed dh", out_current_png, "Current signed dh (m)", signed_log_x=True)
         plot_before_after_factor(diag, "Absolute current dh", out_abs_current_png, "|Current dh| (m)", log_x=True)
-        plot_before_after_factor(diag, "Past elevation change", out_memory_png, "Past elevation change (m)", signed_log_x=True)
+        plot_before_after_factor(diag, "Past elevation change", out_memory_png, "Past elevation change rate (m yr$^{-1}$)", signed_log_x=True)
         plot_before_after_factor(diag, "Area", out_area_png, "Area", log_x=True)
         plot_before_after_factor(diag, "Period length", out_period_png, "Period length (yr)")
 
         plot_std_before_after_factor(diag, "Current signed dh", out_std_current_png, "Current signed dh (m)", signed_log_x=True)
         plot_std_before_after_factor(diag, "Absolute current dh", out_std_abs_current_png, "|Current dh| (m)", log_x=True)
-        plot_std_before_after_factor(diag, "Past elevation change", out_std_memory_png, "Past elevation change (m)", signed_log_x=True)
+        plot_std_before_after_factor(diag, "Past elevation change", out_std_memory_png, "Past elevation change rate (m yr$^{-1}$)", signed_log_x=True)
         plot_std_before_after_factor(diag, "Area", out_std_area_png, "Area", log_x=True)
         plot_std_before_after_factor(diag, "Period length", out_std_period_png, "Period length (yr)")
 
         plot_standardized_after_factor(diag, "Current signed dh", out_z_current_png, "Current signed dh (m)", signed_log_x=True)
         plot_standardized_after_factor(diag, "Absolute current dh", out_z_abs_current_png, "|Current dh| (m)", log_x=True)
-        plot_standardized_after_factor(diag, "Past elevation change", out_z_memory_png, "Past elevation change (m)", signed_log_x=True)
+        plot_standardized_after_factor(diag, "Past elevation change", out_z_memory_png, "Past elevation change rate (m yr$^{-1}$)", signed_log_x=True)
         plot_standardized_after_factor(diag, "Area", out_z_area_png, "Area", log_x=True)
         plot_standardized_after_factor(diag, "Period length", out_z_period_png, "Period length (yr)")
 
@@ -6423,7 +6413,7 @@ def run_memory_profile(all_rows):
     Refit the full candidate set for multiple memory definitions, then score:
       - fit error;
       - residual structure against all fixed diagnostic memory windows;
-      - residual structure against past-window rates;
+      - residual structure against past elevation change rates over fixed windows;
       - residual structure against current dh, period length, and area.
 
     This is the decision layer for choosing the memory-dh definition.
@@ -6970,7 +6960,7 @@ def _plot_joint_memory_period_lines(ax, tab, ycol, title):
     ax.axhline(0, color="black", lw=1)
     ax.axvline(0, color="black", lw=1)
     set_signed_log_xaxis(ax, tab["memory_center_w"].to_numpy(float))
-    ax.set_xlabel("Joint fitted past elevation change")
+    ax.set_xlabel("Joint fitted past elevation change rate")
     ax.set_ylabel("Weighted mean residual")
     ax.set_title(title)
     ax.grid(alpha=0.25)
@@ -7023,7 +7013,7 @@ def plot_joint_kernel_memory_residuals(results, out_png):
 
         mem_diag = summarize_joint_memory_diagnostics(out)
         _plot_joint_memory_period_lines(
-            axes[1, j], mem_diag, "value_mean_w", f"{kernel}: residual vs fitted past elevation change"
+            axes[1, j], mem_diag, "value_mean_w", f"{kernel}: residual vs fitted past elevation change rate"
         )
     fig.savefig(out_png, dpi=DPI, bbox_inches="tight")
     plt.close(fig)
@@ -7291,7 +7281,7 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
     else:
         xgrid = _main_dense_signed_support()
 
-    # Panel a: past-elevation-change dependence at fixed 5-year period
+    # Panel a: past elevation change rate dependence at fixed 5-year period
     target_right = _filter_main_mean_right_panel_target_to_period(target, target_year=5.0)
     by_memory = _aggregate_target_pair(
         target=target_right,
@@ -7365,11 +7355,11 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
             Line2D([], [], marker="o", ms=5, lw=1.8, color=cmap_mem(norm_mem(float(lbl))), label=_format_memory_label(float(lbl)))
             for lbl in label_vals
         ]
-        leg1 = ax_mem.legend(handles=color_handles, title="Past elevation\nchange " + r"$\Delta h^{\rm p}$", frameon=False, fontsize=9, title_fontsize=10, loc="lower left")
+        leg1 = ax_mem.legend(handles=color_handles, title="Past elevation\nchange rate " + r"$\dot{h}^{\rm p}$", frameon=False, fontsize=9, title_fontsize=10, loc="lower left")
         ax_mem.add_artist(leg1)
         ax_mem.legend(handles=_main_style_legend_handles(), frameon=False, fontsize=10, loc="lower right")
 
-    # Panel b: neutral past-elevation-change dependence colored by period
+    # Panel b: neutral past elevation change rate dependence colored by period
     neutral_tab = _neutral_memory_mean_panel_table(d_pred, fit_obj, selected_model)
     neutral_tab.to_csv(out_plot_dir / f"{run_label}_{main_suffix}_main_neutral_memory_mean_panel_summary.csv", index=False)
     if neutral_tab.empty:
@@ -7427,7 +7417,7 @@ def plot_main_rho_mean_figure(target, selected_model, d_pred, fit_obj, d_pred_no
     ax_mem.set_ylim(-100.0, 1700.0)
     ax_per.set_ylim(-100.0, 1700.0)
     ax_mem.text(0.98, 0.98, "Period length = 5 yr", transform=ax_mem.transAxes, ha="right", va="top", fontsize=10)
-    ax_per.text(0.98, 0.98, "Past elevation change = 0 m", transform=ax_per.transAxes, ha="right", va="top", fontsize=10)
+    ax_per.text(0.98, 0.98, "Past elevation change rate = 0 m yr$^{-1}$", transform=ax_per.transAxes, ha="right", va="top", fontsize=10)
     ax_mem.set_xlabel(r"Elevation change $\Delta h$ (m)")
     ax_per.set_xlabel(r"Elevation change $\Delta h$ (m)")
     ax_mem.set_ylabel(r"Mean of effective density $\mu_{\rho}$ (kg m$^{-3}$)")
@@ -7585,7 +7575,7 @@ def _plot_supp_panel(ax, suball, ycol, periods, x_label, y_label,
 def plot_supp_rho_mean_figure(diag, out_png):
     specs = [
         ("Current signed dh", r"Elevation change $\Delta h$ (m)", True, False),
-        ("Past elevation change", r"Past elevation change $\Delta h^{\rm p}$ (m)", False, False),
+        ("Past elevation change", r"Past elevation change rate $\dot{h}^{\rm p}$ (m yr$^{-1}$)", False, False),
         ("Area", r"Glacier area $A$", False, True),
     ]
     d = diag.loc[diag["factor"].isin([sp[0] for sp in specs])].copy()
@@ -7632,7 +7622,7 @@ def plot_supp_rho_mean_figure(diag, out_png):
 def plot_supp_rho_std_figure(diag, out_png):
     specs = [
         ("Current signed dh", r"Elevation change $\Delta h$ (m)", True, False),
-        ("Past elevation change", r"Past elevation change $\Delta h^{\rm p}$ (m)", False, False),
+        ("Past elevation change", r"Past elevation change rate $\dot{h}^{\rm p}$ (m yr$^{-1}$)", False, False),
         ("Area", r"Glacier area $A$", False, True),
     ]
     d = diag.loc[diag["factor"].isin([sp[0] for sp in specs])].copy()

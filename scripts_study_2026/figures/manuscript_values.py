@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Generate manuscript-ready values from full-model outputs and the surrogate."""
+"""Script to generate the manuscript values from full model outputs and the surrogate model."""
 
 from __future__ import annotations
 
 import math
-import re
 import sys
 from pathlib import Path
 
@@ -30,7 +29,6 @@ from study_paths import (
     PARAM_PATH,
     SPATIAL_PARAM_PATH,
     TEMPORAL_PARAM_PATH,
-    FIT_SUMMARY_PATH,
     STANDARDIZED_RESIDUALS_PATH,
     AGREEMENT_DIAGNOSTICS_DIR,
     HUGONNET_DIAGNOSTICS_DIR,
@@ -42,7 +40,6 @@ from study_paths import (
 # Define project paths
 DEFAULT_INPUT_CSV = INPUT_CSV
 DEFAULT_OUTDIR = MANUSCRIPT_VALUES_DIAGNOSTICS_DIR
-FIT_SUMMARY_CSV = FIT_SUMMARY_PATH
 EXACT_RESIDUAL_CSV = STANDARDIZED_RESIDUALS_PATH
 AGREEMENT_DIR = AGREEMENT_DIAGNOSTICS_DIR
 AGREEMENT_DETAIL_CSV = AGREEMENT_DIR / "regional_period_agreement_detail.csv"
@@ -56,7 +53,6 @@ HUGONNET_GLACIER_CHANGES_CSV = HUGONNET_APP_DIR / "glacier_period_average_change
 PARAM_CSV = PARAM_PATH
 SPATIAL_PARAM_CSV = SPATIAL_PARAM_PATH
 TEMPORAL_PARAM_CSV = TEMPORAL_PARAM_PATH
-MANUSCRIPT_TEX: Path | None = None
 
 # Define run controls
 ALL_VARIANTS = False
@@ -69,26 +65,24 @@ GH_ORDER = 64
 RHO_SENTINELS = {-99999.0, 99999.0}
 VARIANT_COL = "rho_variant"
 PARAM_UNITS = {
-    "rho_ice": "kg m-3",
-    "H_d": "m",
-    "P_d": "1",
-    "B_h": "kg m-3",
+    "rho_ice_fixed": "kg m-3",
+    "H": "m",
+    "beta": "1",
+    "Bc": "kg m-3",
     "B_0": "kg m-3",
-    "B_t": "kg m-3",
-    "T_t": "yr",
     "P0": "kg m-3",
     "P1": "kg m-3",
     "TP": "yr",
     "B_deltat": "kg m-3",
     "T_deltat": "yr",
-    "B_p": "kg m-3 (m yr-1)^-Pp",
-    "P_p": "1",
-    "B_q": "kg m-3 m^Pq",
-    "H_q": "m yr-1",
-    "P_q": "1",
-    "T_p": "yr",
-    "U_h": "kg m-3 m1/2",
-    "U_t": "kg m-3 m yr-1/2",
+    "Bmem": "kg m-3 (m yr-1)^-etaMem",
+    "etaMem": "1",
+    "A": "kg m-3 m^alpha",
+    "LA": "m yr-1",
+    "alpha": "1",
+    "memory_tau_years": "yr",
+    "A0": "kg m-3 m1/2",
+    "A1": "kg m-3 m yr-1/2",
     "alpha_n": "1",
     "beta_n": "1",
     "alpha_s": "1",
@@ -100,8 +94,14 @@ PARAM_UNITS = {
 }
 
 
+#############################################
+# OBSERVATIONS AND PAST ELEVATION CHANGE RATE
+#############################################
+
+
 def _first_existing(columns: pd.Index, candidates: list[str], required: bool = True) -> str | None:
-    """Return the first matching dataframe column
+    """
+    Return the first matching dataframe column
 
     :param columns: Available column names
     :param candidates: Candidate column names
@@ -115,25 +115,11 @@ def _first_existing(columns: pd.Index, candidates: list[str], required: bool = T
     return None
 
 
-def read_uncommented_manuscript(path: Path | None) -> str:
-    """Read a LaTeX manuscript while ignoring commented paragraphs
-
-    :param path: Optional manuscript path
-    """
-    if path is None or not path.exists():
-        return ""
-    keep: list[str] = []
-    for line in path.read_text().splitlines():
-        if line.lstrip().startswith("%"):
-            continue
-        keep.append(line)
-    return "\n".join(keep)
-
-
 def read_full_model_input(path: Path, variants: list[str] | None = None) -> pd.DataFrame:
-    """Read the full-model effective-density calibration sample
+    """
+    Read the full model effective density calibration sample
 
-    :param path: Full-model input CSV
+    :param path: Full model input CSV
     :param variants: Optional sensitivity variants to retain
     """
     header = pd.read_csv(path, nrows=0).columns
@@ -187,7 +173,7 @@ def read_full_model_input(path: Path, variants: list[str] | None = None) -> pd.D
     df["mass_proxy"] = df["area"] * df["b"]
     df["abs_dV_weight"] = np.abs(df["signed_dV_proxy"])
 
-    # Avoid over-weighting repeated sensitivity variants
+    # Avoid overweighting repeated sensitivity variants
     nvar = df.groupby(["rgiid", "start_date", "end_date"], observed=True)[VARIANT_COL].transform("nunique")
     df["abs_dV_weight"] = df["abs_dV_weight"] / nvar.clip(lower=1)
     df["mass_proxy"] = df["mass_proxy"] / nvar.clip(lower=1)
@@ -197,11 +183,12 @@ def read_full_model_input(path: Path, variants: list[str] | None = None) -> pd.D
 
 
 def attach_exponential_past_change(df: pd.DataFrame, tau_years: float, tau_max: float) -> pd.DataFrame:
-    """Attach the final exponential past elevation-change predictor
+    """
+    Attach the final exponential past elevation change rate
 
-    :param df: Full-model input rows
+    :param df: Full model input rows
     :param tau_years: Exponential memory time scale in years
-    :param tau_max: Maximum look-back period in years
+    :param tau_max: Maximum number of past years to include
     """
     out = df.copy()
     annual = df.loc[
@@ -271,8 +258,14 @@ def attach_exponential_past_change(df: pd.DataFrame, tau_years: float, tau_max: 
     return out
 
 
+##################################
+# WEIGHTED STATISTICS AND EXAMPLES
+##################################
+
+
 def weighted_mean(values: pd.Series | np.ndarray, weights: pd.Series | np.ndarray) -> float:
-    """Compute a finite weighted mean
+    """
+    Compute a finite weighted mean
 
     :param values: Values to average
     :param weights: Positive weights
@@ -285,23 +278,9 @@ def weighted_mean(values: pd.Series | np.ndarray, weights: pd.Series | np.ndarra
     return float(np.sum(v[ok] * w[ok]) / np.sum(w[ok]))
 
 
-def weighted_std(values: pd.Series | np.ndarray, weights: pd.Series | np.ndarray) -> float:
-    """Compute a finite weighted standard deviation
-
-    :param values: Values to summarize
-    :param weights: Positive weights
-    """
-    v = np.asarray(values, dtype=float)
-    w = np.asarray(weights, dtype=float)
-    ok = np.isfinite(v) & np.isfinite(w) & (w > 0)
-    if not np.any(ok):
-        return np.nan
-    mean = np.sum(v[ok] * w[ok]) / np.sum(w[ok])
-    return float(np.sqrt(np.sum(w[ok] * (v[ok] - mean) ** 2) / np.sum(w[ok])))
-
-
 def weighted_quantile(values: pd.Series | np.ndarray, weights: pd.Series | np.ndarray, quantile: float) -> float:
-    """Compute a finite weighted quantile
+    """
+    Compute a finite weighted quantile
 
     :param values: Values to summarize
     :param weights: Positive weights
@@ -320,7 +299,8 @@ def weighted_quantile(values: pd.Series | np.ndarray, weights: pd.Series | np.nd
 
 
 def weighted_quantile_skewness(values: pd.Series | np.ndarray, weights: pd.Series | np.ndarray) -> float:
-    """Compute the Bowley weighted quantile skewness used in Fig. S3
+    """
+    Compute the Bowley weighted quantile skewness used in Fig. S3
 
     :param values: Values to summarize
     :param weights: Positive weights
@@ -335,7 +315,8 @@ def weighted_quantile_skewness(values: pd.Series | np.ndarray, weights: pd.Serie
 
 
 def weighted_excess_kurtosis(values: pd.Series | np.ndarray, weights: pd.Series | np.ndarray) -> float:
-    """Compute weighted excess kurtosis used in Fig. S3
+    """
+    Compute weighted excess kurtosis used in Fig. S3
 
     :param values: Values to summarize
     :param weights: Positive weights
@@ -354,22 +335,9 @@ def weighted_excess_kurtosis(values: pd.Series | np.ndarray, weights: pd.Series 
     return float(np.average(((v - mu) / sd) ** 4, weights=w) - 3.0)
 
 
-def weighted_rmse(values: pd.Series | np.ndarray, weights: pd.Series | np.ndarray) -> float:
-    """Compute a finite weighted root-mean-square value
-
-    :param values: Values to summarize
-    :param weights: Positive weights
-    """
-    v = np.asarray(values, dtype=float)
-    w = np.asarray(weights, dtype=float)
-    ok = np.isfinite(v) & np.isfinite(w) & (w > 0)
-    if not np.any(ok):
-        return np.nan
-    return float(np.sqrt(np.sum(w[ok] * v[ok] ** 2) / np.sum(w[ok])))
-
-
 def aggregate_effective_density(df: pd.DataFrame) -> float:
-    """Aggregate effective density by summing mass and volume proxies
+    """
+    Aggregate effective density by summing mass change and volume change proxies
 
     :param df: Rows to aggregate
     """
@@ -380,32 +348,30 @@ def aggregate_effective_density(df: pd.DataFrame) -> float:
 
 
 def past_change_weight_fraction(timescale_years: float, years: int) -> float:
-    """Return the discrete exponential past-change weight within a look-back period
+    """
+    Calculate the fraction of exponential history weights within a given number of years
 
     :param timescale_years: Exponential decay time scale
-    :param years: Look-back length in years
+    :param years: Number of past years to include
     """
     q = float(np.exp(-1.0 / timescale_years))
     return float(1.0 - q**int(years))
 
 
 def temporal_display_parameters() -> tuple[float, float]:
-    """Return the positive-lag temporal correlation parameters shown in the figure
+    """
+    Read the temporal correlation parameters used for positive lags in the figure
 
-    The manuscript equation uses the simple positive-lag exponential correlation
-    curve plotted in the main figure.
+    The manuscript equation uses the exponential correlation
+    curve for positive lags plotted in the main figure.
     """
     params = pd.read_csv(TEMPORAL_PARAM_CSV).iloc[0]
-    if "empirical_sill" in params and "empirical_range_yr" in params:
-        return float(params["empirical_sill"]), float(params["empirical_range_yr"])
-    if "empirical_amplitude_after_nugget" in params and "empirical_timescale_yr" in params:
-        return float(params["empirical_amplitude_after_nugget"]), float(params["empirical_timescale_yr"])
-    nugget = float(params.get("empirical_nugget", params.get("nugget", 0.70)))
-    return 1.0 - nugget, float(params.get("empirical_timescale_yr", 3.0))
+    return float(params["empirical_sill"]), float(params["empirical_range_yr"])
 
 
 def temporal_display_corr(lag_years: float | np.ndarray) -> np.ndarray:
-    """Evaluate the displayed positive-lag temporal correlation model
+    """
+    Calculate the displayed temporal correlation at the given lags
 
     :param lag_years: Temporal lag in years
     """
@@ -416,15 +382,21 @@ def temporal_display_corr(lag_years: float | np.ndarray) -> np.ndarray:
 
 
 def temporal_closure_summary(model: RhoSurrogate) -> pd.DataFrame:
-    """Recompute the synthetic temporal-closure values used in Fig. 5
+    """
+    Recompute the synthetic temporal closure values used in Fig. 5
 
-    :param model: Effective-density surrogate
+    :param model: Effective density surrogate
     """
     annual = make_synthetic_series()
     periods = build_periods(annual, model=model, area_m2=AREA_KM2 * 1e6)
     periods, _ = temporal_reconcile(periods, n_elem=len(annual), model=model)
     summary, _ = make_summary_tables(periods, int(annual["year0"].min()), int(annual["year1"].max()))
     return summary
+
+
+#####################
+# MANUSCRIPT SECTIONS
+#####################
 
 
 def add_value(
@@ -436,12 +408,13 @@ def add_value(
     source: str,
     context: str,
 ) -> None:
-    """Append one manuscript value record
+    """
+    Append one manuscript value record
 
     :param rows: Mutable row list
     :param key: Stable manuscript value key
     :param value: Raw numeric or text value
-    :param formatted: Manuscript-ready formatted value
+    :param formatted: Formatted value to report in the manuscript
     :param units: Value units
     :param source: Computation source
     :param context: Manuscript sentence or section
@@ -459,7 +432,8 @@ def add_value(
 
 
 def manuscript_section(key: str, context: str) -> tuple[int, str]:
-    """Assign each value to the manuscript section where it is used
+    """
+    Assign each value to the manuscript section where it is used
 
     :param key: Stable manuscript value key
     :param context: Manuscript sentence or section
@@ -482,7 +456,7 @@ def manuscript_section(key: str, context: str) -> tuple[int, str]:
         "surrogate_parameter_r_t",
     }
     if key.startswith("rgi") or key.startswith("global_effective_density_"):
-        return 30, "Results - regionally-specified effective densities"
+        return 30, "Results - regional effective densities"
     if key.startswith("surrogate_parameter_") and key not in correlation_parameter_keys:
         return 40, "Results - mean and uncertainty with observable predictors"
     if key in {"skewness_reduction", "kurtosis_reduction"}:
@@ -511,14 +485,13 @@ def manuscript_section(key: str, context: str) -> tuple[int, str]:
     ):
         return 90, "Discussion - implications for previous assessments"
     if key.startswith("hugonnet_global_") or key.startswith("hugonnet_regional_") or key.startswith("hugonnet_per_glacier_"):
-        return 100, "Discussion - revised global-scale mass change estimate"
-    if key.startswith("uncommented_xx"):
-        return 110, "Manuscript scan"
+        return 100, "Discussion - revised global mass change estimate"
     return 999, context or "Other"
 
 
 def order_catalog(rows: list[dict[str, object]]) -> pd.DataFrame:
-    """Create a manuscript-ordered value catalog
+    """
+    Order the values by the manuscript section where they are used
 
     :param rows: Raw value records in computation order
     """
@@ -533,10 +506,16 @@ def order_catalog(rows: list[dict[str, object]]) -> pd.DataFrame:
     return catalog.reset_index(drop=True)
 
 
-def summarize_input(df: pd.DataFrame) -> pd.DataFrame:
-    """Summarize the full-model calibration sample
+######################################
+# CALIBRATION AND PREDICTION SUMMARIES
+######################################
 
-    :param df: Evaluated full-model rows
+
+def summarize_input(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Summarize the full model calibration sample
+
+    :param df: Evaluated full model rows
     """
     periods = df[["start_date", "end_date"]].drop_duplicates()
     rows = [
@@ -553,10 +532,11 @@ def summarize_input(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def evaluate_rows(df: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
-    """Apply the surrogate mean and uncertainty to full-model rows
+    """
+    Apply the surrogate mean and uncertainty to full model rows
 
-    :param df: Full-model rows with predictors
-    :param model: Effective-density surrogate
+    :param df: Full model rows with predictors
+    :param model: Effective density surrogate
     """
     out = df.copy()
     out["mu_rho_kg_m3"] = model.mu_rho(
@@ -571,9 +551,10 @@ def evaluate_rows(df: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
 
 
 def evaluate_reference_cases(model: RhoSurrogate) -> pd.DataFrame:
-    """Evaluate manuscript reference cases for the surrogate
+    """
+    Evaluate manuscript reference cases for the surrogate
 
-    :param model: Effective-density surrogate
+    :param model: Effective density surrogate
     """
     rows = []
     for dt in [1, 2, 5, 10, 20]:
@@ -591,9 +572,10 @@ def evaluate_reference_cases(model: RhoSurrogate) -> pd.DataFrame:
 
 
 def summarize_model_application(df: pd.DataFrame) -> pd.DataFrame:
-    """Summarize surrogate application by period length
+    """
+    Summarize surrogate application by period length
 
-    :param df: Evaluated full-model rows
+    :param df: Evaluated full model rows
     """
     rows = []
     for period, g in df.groupby("period_years", sort=True):
@@ -613,9 +595,10 @@ def summarize_model_application(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def summarize_correlations(model: RhoSurrogate) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build spatial and temporal correlation reference tables
+    """
+    Build spatial and temporal correlation reference tables
 
-    :param model: Effective-density surrogate
+    :param model: Effective density surrogate
     """
     spatial_rows = []
     for distance in [0, 50, 100, 200, 500, 1000, 5000, 10000, 20000]:
@@ -632,9 +615,10 @@ def summarize_correlations(model: RhoSurrogate) -> tuple[pd.DataFrame, pd.DataFr
 
 
 def summarize_region_long_period(df: pd.DataFrame) -> pd.DataFrame:
-    """Summarize full-period effective densities by RGI region
+    """
+    Summarize effective densities over the longest period in each RGI region
 
-    :param df: Evaluated full-model rows
+    :param df: Evaluated full model rows
     """
     d = df.copy()
     period = float(d["period_years"].max())
@@ -644,7 +628,7 @@ def summarize_region_long_period(df: pd.DataFrame) -> pd.DataFrame:
     if "rgi_region" not in d.columns:
         d["rgi_region"] = pd.to_numeric(d["rgiid"].astype(str).str.extract(r"RGI60-(\d+)")[0], errors="coerce")
 
-    # Compute regional mass-over-volume ratios
+    # Divide each region's total mass change by its total volume change
     rows = []
     for region, g in d.groupby("rgi_region", sort=True):
         rows.append(
@@ -662,46 +646,9 @@ def summarize_region_long_period(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def summarize_normality(df: pd.DataFrame) -> pd.DataFrame:
-    """Summarize raw, centered, and standardized distribution shapes
-
-    :param df: Evaluated full-model rows
-    """
-    raw = df["rho"].to_numpy(float)
-    centered = df["rho_residual_kg_m3"].to_numpy(float)
-    z = df["z_rho"].to_numpy(float)
-    if "abs_dV_weight" in df.columns:
-        weights = df["abs_dV_weight"].to_numpy(float)
-    else:
-        weights = np.ones_like(raw, dtype=float)
-    ok = np.isfinite(raw) & np.isfinite(centered) & np.isfinite(z) & np.isfinite(weights) & (weights > 0)
-    values = {"raw_rho": raw[ok], "mean_removed": centered[ok], "standardized": z[ok]}
-    weights = weights[ok]
-    rows = []
-    for name, arr in values.items():
-        rows.append(
-            {
-                "distribution": name,
-                "n": int(arr.size),
-                "robust_skewness": weighted_quantile_skewness(arr, weights),
-                "excess_kurtosis": weighted_excess_kurtosis(arr, weights),
-            }
-        )
-    out = pd.DataFrame(rows)
-    raw_skew = abs(out.loc[out["distribution"].eq("raw_rho"), "robust_skewness"].iloc[0])
-    centered_skew = abs(out.loc[out["distribution"].eq("mean_removed"), "robust_skewness"].iloc[0])
-    raw_kurt = abs(out.loc[out["distribution"].eq("raw_rho"), "excess_kurtosis"].iloc[0])
-    standardized_kurt = abs(out.loc[out["distribution"].eq("standardized"), "excess_kurtosis"].iloc[0])
-    out["reduction_percent"] = np.nan
-    if raw_skew > 0:
-        out.loc[out["distribution"].eq("mean_removed"), "reduction_percent"] = 100.0 * (1.0 - centered_skew / raw_skew)
-    if raw_kurt > 0:
-        out.loc[out["distribution"].eq("standardized"), "reduction_percent"] = 100.0 * (1.0 - standardized_kurt / raw_kurt)
-    return out
-
-
 def summarize_exact_residual_normality(path: Path) -> pd.DataFrame:
-    """Summarize distribution shapes from the exact fit residual output
+    """
+    Summarize distribution shapes from the exact fit residual output
 
     :param path: Standardized residual CSV written by the fitting script
     """
@@ -740,14 +687,9 @@ def summarize_exact_residual_normality(path: Path) -> pd.DataFrame:
     return out
 
 
-def read_fit_summary(path: Path) -> pd.Series:
-    """Read the retained mean-model fit summary
-
-    :param path: Fit summary CSV written by the fitting script
-    """
-    if not path.exists():
-        raise FileNotFoundError(path)
-    return pd.read_csv(path).iloc[0]
+###################################
+# AGREEMENT AND MASS CHANGE RESULTS
+###################################
 
 
 def read_surrogate_agreement_outputs(
@@ -756,12 +698,13 @@ def read_surrogate_agreement_outputs(
     period_summary_path: Path,
     glacier_summary_path: Path,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Read regional full-model versus surrogate agreement outputs
+    """
+    Read regional full model versus surrogate agreement outputs
 
-    :param detail_path: Region-period agreement table from the analysis script
+    :param detail_path: Region and period agreement table from the analysis script
     :param regional_summary_path: Regional agreement summary table from the analysis script
     :param period_summary_path: Agreement summary by period length
-    :param glacier_summary_path: Glacier-scale agreement summary table
+    :param glacier_summary_path: Glacier scale agreement summary table
     """
     missing = [
         path
@@ -800,7 +743,8 @@ AGREEMENT_MODE_LABELS = {
 
 
 def agreement_ci_weighted_column(summary: pd.DataFrame, scale_key: str) -> str:
-    """Return the weighted CI-hit column to use for one agreement scale.
+    """
+    Select the column reporting the weighted fraction of overlapping confidence intervals.
 
     :param summary: Agreement summary table
     :param scale_key: ``glacier_scale`` or ``regional_scale``
@@ -811,7 +755,7 @@ def agreement_ci_weighted_column(summary: pd.DataFrame, scale_key: str) -> str:
         return "ci95_intersection_weighted_fraction"
     if "ci95_intersection_independent_weighted_fraction" in summary.columns:
         return "ci95_intersection_independent_weighted_fraction"
-    raise KeyError(f"No weighted CI-hit fraction column found for {scale_key}")
+    raise KeyError(f"No weighted confidence interval overlap column found for {scale_key}")
 
 
 def add_agreement_catalog_values(
@@ -820,12 +764,13 @@ def add_agreement_catalog_values(
     scale_key: str,
     scale_label: str,
 ) -> None:
-    """Record agreement variance, bias and CI-hit values by closure mode.
+    """
+    Record explained variance, bias and confidence interval overlap before and after reconciliation.
 
-    :param rows: Mutable manuscript-value rows
+    :param rows: List of manuscript values to append to
     :param summary: Agreement summary table with independent and closed rows
     :param scale_key: Stable key component for the scale
-    :param scale_label: Human-readable scale label
+    :param scale_label: Label for glacier or regional estimates
     """
     ci_col = agreement_ci_weighted_column(summary, scale_key)
     for mode in ["independent", "closed"]:
@@ -870,7 +815,7 @@ def add_agreement_catalog_values(
 
 
 def read_hugonnet_application_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Read the global, regional and glacier-scale Hugonnet application outputs."""
+    """Read the global, regional and glacier scale Hugonnet application outputs."""
     missing = [path for path in [HUGONNET_GLOBAL_CSV, HUGONNET_REGIONAL_CSV, HUGONNET_GLACIER_CHANGES_CSV] if not path.exists()]
     if missing:
         msg = ", ".join(str(path) for path in missing)
@@ -886,210 +831,16 @@ def read_hugonnet_application_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.
     )
 
 
-def summarize_regional_period_surrogate_agreement(
-    df: pd.DataFrame,
-    model: RhoSurrogate,
-    start_year: float = 2004.0,
-    end_year: float = 2019.0,
-    variant: str = REFERENCE_VARIANT,
-) -> tuple[pd.DataFrame, dict[str, float]]:
-    """Compare final surrogate and full-model means after regional aggregation
-
-    The final surrogate is applied glacier by glacier to all contiguous periods
-    inside the evaluation window, then temporally reconciled before aggregating
-    effective density by RGI region and period. Elevation-change predictors are
-    treated as exact values for this comparison, because both the surrogate and
-    full-model estimates are derived from the same modelled volume changes.
-
-    :param df: Full-model input rows
-    :param model: Effective-density surrogate
-    :param start_year: First annual period start year to retain
-    :param end_year: Last annual period end year requested
-    :param variant: Full-model sensitivity variant to retain
-    """
-    d = df.loc[df[VARIANT_COL].astype(str).eq(variant)].copy()
-    if "rgi_region" not in d.columns:
-        d["rgi_region"] = pd.to_numeric(d["rgiid"].astype(str).str.extract(r"RGI60-(\d+)")[0], errors="coerce")
-    d = d.replace([np.inf, -np.inf], np.nan)
-    d = d.dropna(subset=["rgiid", "rgi_region", "start_date", "end_date", "rho", "b", "area", "signed_dh", "signed_dV_proxy", "mass_proxy"])
-
-    # Use annual periods before the evaluation window to compute the same
-    # exponentially weighted past-elevation-change predictor as in the surrogate.
-    annual = d.loc[np.isclose(d["period_years"].to_numpy(float), 1.0), ["rgiid", "start_date", "signed_dh"]].copy()
-    annual = annual.sort_values(["rgiid", "start_date"]).drop_duplicates(["rgiid", "start_date"], keep="first")
-    annual_wide = annual.pivot(index="rgiid", columns="start_date", values="signed_dh")
-    tau_years = float(model.params.get("T_p", 5.0))
-    tau_max = int(round(float(model.params.get("tau_max", 20.0))))
-    validation_starts = np.arange(int(start_year), int(end_year))
-    past_parts = []
-    for start in validation_starts:
-        available_lags = [lag for lag in range(1, tau_max + 1) if (start - lag) in annual_wide.columns]
-        if not available_lags:
-            vals = pd.Series(0.0, index=annual_wide.index, name="past_dh")
-        else:
-            weights = np.exp(-np.asarray(available_lags, dtype=float) / tau_years)
-            cols = [start - lag for lag in available_lags]
-            arr = annual_wide.loc[:, cols].to_numpy(float)
-            finite = np.isfinite(arr)
-            denom = np.sum(finite * weights[None, :], axis=1)
-            vals_arr = np.divide(
-                np.nansum(np.where(finite, arr, 0.0) * weights[None, :], axis=1),
-                denom,
-                out=np.zeros(len(annual_wide), dtype=float),
-                where=denom > 0,
-            )
-            vals = pd.Series(vals_arr, index=annual_wide.index, name="past_dh")
-        part = vals.reset_index()
-        part["start_date"] = float(start)
-        past_parts.append(part)
-    past = pd.concat(past_parts, ignore_index=True)
-
-    periods = d.loc[(d["start_date"] >= start_year) & (d["end_date"] <= end_year)].copy()
-    periods = periods.drop(columns=["past_dh", "has_past_dh", "past_start_date"], errors="ignore")
-    periods = periods.merge(past, on=["rgiid", "start_date"], how="left", validate="many_to_one")
-    periods["past_dh"] = periods["past_dh"].fillna(0.0)
-
-    # Apply the surrogate to all glacier-period rows before temporal closure.
-    periods["mu_rho_ind_kg_m3"] = model.mu_rho(
-        periods["signed_dh"].to_numpy(float),
-        dh_p=periods["past_dh"].to_numpy(float),
-        dt=periods["period_years"].to_numpy(float),
-    )
-    periods["sigma_rho_ind_kg_m3"] = model.sigma_rho(
-        periods["signed_dh"].to_numpy(float),
-        dt=periods["period_years"].to_numpy(float),
-    )
-    periods["dV_m3"] = periods["area"] * periods["signed_dh"]
-    periods["dM_full"] = periods["rho"] * periods["dV_m3"]
-    periods["dM_ind_kg"] = periods["mu_rho_ind_kg_m3"] * periods["dV_m3"]
-    periods["b_ind_kg"] = (periods["mu_rho_ind_kg_m3"] - model.rho_ice) * periods["dV_m3"]
-    periods["sigma_dM_rho_ind_kg"] = periods["sigma_rho_ind_kg_m3"] * np.abs(periods["dV_m3"])
-    periods["i0"] = (periods["start_date"] - start_year).astype(int)
-    periods["i1"] = (periods["end_date"] - start_year).astype(int)
-    periods["year0"] = periods["start_date"].astype(int)
-    periods["year1"] = periods["end_date"].astype(int)
-    periods["dt_yr"] = periods["period_years"].astype(int)
-    periods = periods.loc[
-        np.isfinite(periods["mu_rho_ind_kg_m3"])
-        & np.isfinite(periods["sigma_dM_rho_ind_kg"])
-        & np.isfinite(periods["dV_m3"])
-        & (periods["i1"] > periods["i0"])
-    ].copy()
-
-    # Reconcile each glacier independently with a batched version of the same
-    # weighted least-squares problem used in Fig. 5.
-    n_elem = int(end_year - start_year)
-    period_table = (
-        periods[["start_date", "end_date", "i0", "i1", "period_years"]]
-        .drop_duplicates()
-        .sort_values(["start_date", "end_date"])
-        .reset_index(drop=True)
-    )
-    period_table["period_id"] = np.arange(len(period_table))
-    n_period = len(period_table)
-    S = np.zeros((n_period, n_elem), dtype=float)
-    for row in period_table.itertuples(index=False):
-        S[int(row.period_id), int(row.i0) : int(row.i1)] = 1.0
-
-    periods = periods.merge(period_table[["start_date", "end_date", "period_id"]], on=["start_date", "end_date"], how="left", validate="many_to_one")
-    counts = periods.groupby("rgiid", observed=True)["period_id"].nunique()
-    complete_ids = counts.index[counts.eq(n_period)]
-    p = periods.loc[periods["rgiid"].isin(complete_ids)].copy()
-    p = p.sort_values(["rgiid", "period_id"]).reset_index(drop=True)
-    if p.empty:
-        table = pd.DataFrame()
-        return table, {
-            "start_year": np.nan,
-            "end_year": np.nan,
-            "n_regions": 0,
-            "n_annual_periods": 0,
-            "n_periods": 0,
-            "n_region_years": 0,
-            "weighted_rmse": np.nan,
-            "weighted_mae": np.nan,
-            "weighted_bias": np.nan,
-            "weighted_r2": np.nan,
-        }
-
-    n_glacier = int(len(p) // n_period)
-    b = p["b_ind_kg"].to_numpy(float).reshape(n_glacier, n_period)
-    sigma = p["sigma_dM_rho_ind_kg"].to_numpy(float).reshape(n_glacier, n_period)
-    finite_sigma = sigma[np.isfinite(sigma) & (sigma > 0)]
-    sigma_floor = float(np.nanmedian(finite_sigma) * 1.0e-3) if finite_sigma.size else 1.0
-    sigma = np.maximum(sigma, sigma_floor)
-    sigma[~np.isfinite(sigma)] = sigma_floor
-    w2 = 1.0 / sigma**2
-
-    # Solve (S'WS)a = S'Wb for each glacier. A small ridge only stabilizes
-    # numerically ill-conditioned near-zero-volume cases.
-    lhs = np.einsum("pi,gp,pj->gij", S, w2, S, optimize=True)
-    rhs = np.einsum("pi,gp,gp->gi", S, w2, b, optimize=True)
-    ridge = 1.0e-12 * np.nanmedian(np.diagonal(lhs, axis1=1, axis2=2), axis=1)
-    lhs += ridge[:, None, None] * np.eye(n_elem)[None, :, :]
-    elementary_anomaly = np.linalg.solve(lhs, rhs[:, :, None])[:, :, 0]
-    closed_b = elementary_anomaly @ S.T
-    p["dM_closed_kg"] = model.rho_ice * p["dV_m3"].to_numpy(float) + closed_b.reshape(-1)
-    closed_all = p
-
-    rows = []
-    for (region, start, end), g in closed_all.groupby(["rgi_region", "start_date", "end_date"], sort=True):
-        volume = float(np.nansum(g["dV_m3"]))
-        if not np.isfinite(volume) or abs(volume) < 1.0e-12:
-            continue
-        full = float(np.nansum(g["dM_full"]) / volume)
-        surrogate = float(np.nansum(g["dM_closed_kg"]) / volume)
-        rows.append(
-            {
-                "rgi_region": int(region),
-                "start_date": float(start),
-                "end_date": float(end),
-                "period_years": float(end - start),
-                "n_glaciers": int(g["rgiid"].nunique()),
-                "full_model_density_kg_m3": full,
-                "surrogate_density_kg_m3": surrogate,
-                "residual_pred_minus_full_kg_m3": surrogate - full,
-                "volume_weight": abs(volume),
-            }
-        )
-    table = pd.DataFrame(rows)
-    if table.empty:
-        return table, {
-            "start_year": np.nan,
-            "end_year": np.nan,
-            "n_regions": 0,
-            "n_annual_periods": 0,
-            "n_periods": 0,
-            "n_region_years": 0,
-            "weighted_rmse": np.nan,
-            "weighted_mae": np.nan,
-            "weighted_bias": np.nan,
-            "weighted_r2": np.nan,
-        }
-
-    residual = table["residual_pred_minus_full_kg_m3"].to_numpy(float)
-    full = table["full_model_density_kg_m3"].to_numpy(float)
-    weight = table["volume_weight"].to_numpy(float)
-    full_mean = weighted_mean(full, weight)
-    denom = weighted_mean((full - full_mean) ** 2, weight)
-    summary = {
-        "start_year": float(table["start_date"].min()),
-        "end_year": float(table["end_date"].max()),
-        "n_regions": int(table["rgi_region"].nunique()),
-        "n_annual_periods": int(table.loc[np.isclose(table["period_years"], 1.0), ["start_date", "end_date"]].drop_duplicates().shape[0]),
-        "n_periods": int(table[["start_date", "end_date"]].drop_duplicates().shape[0]),
-        "n_region_years": int(len(table)),
-        "weighted_rmse": weighted_rmse(residual, weight),
-        "weighted_mae": weighted_mean(np.abs(residual), weight),
-        "weighted_bias": weighted_mean(residual, weight),
-        "weighted_r2": float(1.0 - weighted_mean(residual**2, weight) / denom) if denom > 0 else np.nan,
-    }
-    return table, summary
+#####################
+# DISCUSSION EXAMPLES
+#####################
 
 
 def final_implications_reference_values(model: RhoSurrogate) -> dict[str, float]:
-    """Compute reference values for the final implications paragraph
+    """
+    Compute reference values for the final implications paragraph
 
-    :param model: Effective-density surrogate
+    :param model: Effective density surrogate
     """
     from scipy.optimize import brentq
 
@@ -1105,9 +856,10 @@ def final_implications_reference_values(model: RhoSurrogate) -> dict[str, float]
 
 
 def idealized_population_uncertainty_values(model: RhoSurrogate) -> dict[str, float]:
-    """Compute reproducible uncertainty metrics for the idealized glacier population
+    """
+    Compute reproducible uncertainty metrics for the idealized glacier population
 
-    :param model: Effective-density surrogate
+    :param model: Effective density surrogate
     """
     from scipy.special import erf
 
@@ -1116,10 +868,10 @@ def idealized_population_uncertainty_values(model: RhoSurrogate) -> dict[str, fl
     dt = 20.0
     dh = rates * dt
     sigma_dh = 1.0
-    uh = float(model.params["U_h"])
-    ut = float(model.params["U_t"])
+    uh = float(model.params["A0"])
+    ut = float(model.params["A1"])
 
-    # Use the analytical variance-additive integrated uncertainty form.
+    # Add the variance from elevation change and time, then divide by the absolute change
     eabs = (
         sigma_dh * np.sqrt(2.0 / np.pi) * np.exp(-(dh**2) / (2.0 * sigma_dh**2))
         + dh * erf(dh / (np.sqrt(2.0) * sigma_dh))
@@ -1143,7 +895,8 @@ def idealized_population_uncertainty_values(model: RhoSurrogate) -> dict[str, fl
 
 
 def haversine_distance_matrix(lat_a: np.ndarray, lon_a: np.ndarray, lat_b: np.ndarray, lon_b: np.ndarray) -> np.ndarray:
-    """Compute pairwise great-circle distances in kilometres
+    """
+    Compute pairwise great-circle distances in kilometres
 
     :param lat_a: First latitude array
     :param lon_a: First longitude array
@@ -1162,10 +915,11 @@ def haversine_distance_matrix(lat_a: np.ndarray, lon_a: np.ndarray, lat_b: np.nd
 
 
 def spatial_reduction_examples(df: pd.DataFrame, model: RhoSurrogate, block_size: int = 500) -> pd.DataFrame:
-    """Compute regional uncertainty reductions relative to full correlation
+    """
+    Compute regional uncertainty reductions relative to full correlation
 
-    :param df: Full-model input rows
-    :param model: Effective-density surrogate
+    :param df: Full model input rows
+    :param model: Effective density surrogate
     :param block_size: Pairwise covariance block size
     """
     cases = [
@@ -1215,6 +969,11 @@ def spatial_reduction_examples(df: pd.DataFrame, model: RhoSurrogate, block_size
     return pd.DataFrame(rows)
 
 
+###################
+# MANUSCRIPT VALUES
+###################
+
+
 def build_manuscript_catalog(
     df: pd.DataFrame,
     model: RhoSurrogate,
@@ -1229,24 +988,23 @@ def build_manuscript_catalog(
     hugonnet_global: pd.DataFrame,
     hugonnet_regional: pd.DataFrame,
     hugonnet_glacier_changes: pd.DataFrame,
-    manuscript_text: str,
 ) -> pd.DataFrame:
-    """Build manuscript-keyed value records
+    """
+    Collect the values needed for each manuscript section
 
-    :param df: Evaluated full-model rows
-    :param model: Effective-density surrogate
+    :param df: Evaluated full model rows
+    :param model: Effective density surrogate
     :param input_summary: Input summary table
-    :param region_summary: Full-period regional table
+    :param region_summary: Regional estimates over the full period
     :param normality: Normality diagnostics
     :param regional_period_agreement_modes: Independent and closed agreement diagnostics
-    :param glacier_period_agreement_modes: Glacier-scale independent and closed agreement diagnostics
+    :param glacier_period_agreement_modes: Glacier scale independent and closed agreement diagnostics
     :param final_implications: Final implications paragraph values
     :param idealized_population: Idealized population uncertainty values
     :param spatial_reductions: Regional spatial propagation reduction table
     :param hugonnet_global: Global Hugonnet 2021 application summary
     :param hugonnet_regional: Regional Hugonnet 2021 application summary
-    :param hugonnet_glacier_changes: Glacier-scale change summary
-    :param manuscript_text: Uncommented manuscript text
+    :param hugonnet_glacier_changes: Glacier scale change summary
     """
     rows: list[dict[str, object]] = []
     lookup = {row.metric: row for row in input_summary.itertuples(index=False)}
@@ -1257,17 +1015,17 @@ def build_manuscript_catalog(
     else:
         long_ref = long
 
-    # Record calibration-sample values
+    # Record calibration sample values
     add_value(rows, "calibration_rows", lookup["rows"].value, lookup["rows"].text, "rows", "full_model_input", "Calibration sample")
     add_value(rows, "calibration_glaciers", lookup["glaciers"].value, lookup["glaciers"].text, "glaciers", "full_model_input", "Calibration sample")
     add_value(rows, "period_combinations", lookup["period_combinations"].value, lookup["period_combinations"].text, "periods", "full_model_input", "Calibration sample")
     add_value(rows, "period_length_max", period_max, f"{period_max:.0f}", "yr", "full_model_input", "1999--2019 period length")
 
-    # Record global and regional full-period values
+    # Record global and regional estimates over the full period
     global_signed = aggregate_effective_density(long_ref)
     global_q25 = weighted_quantile(long_ref["rho"], long_ref["abs_dV_weight"], 0.25)
     global_q75 = weighted_quantile(long_ref["rho"], long_ref["abs_dV_weight"], 0.75)
-    add_value(rows, "global_effective_density_signed_full_period", global_signed, f"{global_signed:.0f}", "kg m-3", "full_model_input", "Full-model calibration-sample global signed-volume effective density between 1999--2019")
+    add_value(rows, "global_effective_density_signed_full_period", global_signed, f"{global_signed:.0f}", "kg m-3", "full_model_input", "Global effective density from summed mass changes and signed volume changes in the 1999--2019 calibration sample")
     add_value(rows, "global_effective_density_iqr_p25_full_period", global_q25, f"{global_q25:.0f}", "kg m-3", "full_model_input", "Global interquartile range over 1999--2019")
     add_value(rows, "global_effective_density_iqr_p75_full_period", global_q75, f"{global_q75:.0f}", "kg m-3", "full_model_input", "Global interquartile range over 1999--2019")
     for region in [18, 19]:
@@ -1282,25 +1040,21 @@ def build_manuscript_catalog(
             f"{row['effective_density_abs_dv_weighted_median_kg_m3']:.0f}",
             "kg m-3",
             "full_model_input",
-            f"Regional full-period volume-change-weighted median effective density for RGI {region:02d}",
+            f"Median effective density weighted by absolute volume change over the full period for RGI {region:02d}",
         )
 
     # Record fitted surrogate parameters
-    for key in ["rho_ice", "H_d", "P_d"]:
+    for key in ["rho_ice_fixed", "H", "beta"]:
         value = float(model.params[key])
         add_value(rows, f"surrogate_parameter_{key}", value, f"{value:.3g}", PARAM_UNITS.get(key, ""), "surrogate_parameters", "Retained surrogate model parameter")
     if str(model.params.get("period_form")) == "power_param":
-        value = float(model.params["B_h"]) + float(model.params["P0"])
+        value = float(model.params["Bc"]) + float(model.params["P0"])
         add_value(rows, "surrogate_parameter_B_0", value, f"{value:.3g}", PARAM_UNITS["B_0"], "surrogate_parameters", "Retained surrogate model background parameter")
         value = float(model.params["P1"])
         add_value(rows, "surrogate_parameter_B_deltat", value, f"{value:.3g}", PARAM_UNITS["B_deltat"], "surrogate_parameters", "Retained surrogate model period-length parameter")
         value = float(model.params["TP"])
         add_value(rows, "surrogate_parameter_T_deltat", value, f"{value:.3g}", PARAM_UNITS["T_deltat"], "surrogate_parameters", "Retained surrogate model period-length parameter")
-    else:
-        for key in ["B_h", "B_t", "T_t"]:
-            value = float(model.params[key])
-            add_value(rows, f"surrogate_parameter_{key}", value, f"{value:.3g}", PARAM_UNITS.get(key, ""), "surrogate_parameters", "Retained surrogate model parameter")
-    for key in ["B_p", "P_p", "B_q", "H_q", "P_q", "T_p", "U_h", "U_t"]:
+    for key in ["Bmem", "etaMem", "A", "LA", "alpha", "memory_tau_years", "A0", "A1"]:
         value = float(model.params[key])
         add_value(rows, f"surrogate_parameter_{key}", value, f"{value:.3g}", PARAM_UNITS.get(key, ""), "surrogate_parameters", "Retained surrogate model parameter")
     add_value(rows, "surrogate_parameter_spatial_corr_form", model.params["spatial_corr_form"], str(model.params["spatial_corr_form"]), "1", "correlation_model", "Retained spatial correlation parameter")
@@ -1324,14 +1078,14 @@ def build_manuscript_catalog(
     add_value(rows, "surrogate_parameter_s_t", temporal_sill, f"{temporal_sill:.2g}", "1", "correlation_model", "Displayed temporal correlation parameter")
     add_value(rows, "surrogate_parameter_r_t", temporal_range, f"{temporal_range:.2g}", "yr", "correlation_model", "Displayed temporal correlation parameter")
 
-    # Record abstract examples for a twenty-year period and neutral past change
+    # Record abstract examples for a twenty-year period and neutral past elevation change rate
     for abs_dh in [2, 20]:
         mu = model.mu_rho(float(abs_dh), dh_p=0.0, dt=20.0).item()
         sigma = model.sigma_rho(float(abs_dh), dt=20.0).item()
-        add_value(rows, f"abstract_mu_rho_dt20_abs_dh_{abs_dh:g}m", mu, f"{mu:.0f}", "kg m-3", "surrogate_model", "Abstract twenty-year example with no past elevation-change rate")
-        add_value(rows, f"abstract_sigma_rho_dt20_abs_dh_{abs_dh:g}m", sigma, f"{sigma:.0f}", "kg m-3", "surrogate_model", "Abstract twenty-year example with no past elevation-change rate")
+        add_value(rows, f"abstract_mu_rho_dt20_abs_dh_{abs_dh:g}m", mu, f"{mu:.0f}", "kg m-3", "surrogate_model", "Abstract example over twenty years with zero past elevation change rate")
+        add_value(rows, f"abstract_sigma_rho_dt20_abs_dh_{abs_dh:g}m", sigma, f"{sigma:.0f}", "kg m-3", "surrogate_model", "Abstract example over twenty years with zero past elevation change rate")
 
-    # Record integrated examples mentioned in the final-surrogate Results section
+    # Record integrated examples mentioned in the final surrogate Results section
     for sigma_dh in [0.1, 3.0]:
         mu = model.integrated_mu(dh=0.5, sigma_dh=sigma_dh, dh_p=0.0, sigma_dh_p=0.0, dt=1.0)
         sigma = model.integrated_sigma(dh=0.5, sigma_dh=sigma_dh, dt=1.0)
@@ -1343,7 +1097,7 @@ def build_manuscript_catalog(
             f"{mu:.0f}",
             "kg m-3",
             "surrogate_model",
-            "Final surrogate integrated example with dh=0.5 m, past dh=0 m and dt=1 yr",
+            "Final surrogate integrated example with dh=0.5 m, past elevation change rate=0 m yr-1 and dt=1 yr",
         )
         add_value(
             rows,
@@ -1352,37 +1106,36 @@ def build_manuscript_catalog(
             f"{sigma:.0f}",
             "kg m-3",
             "surrogate_model",
-            "Final surrogate integrated example with dh=0.5 m, past dh=0 m and dt=1 yr",
+            "Final surrogate integrated example with dh=0.5 m, past elevation change rate=0 m yr-1 and dt=1 yr",
         )
 
     # Record uncertainty examples with uncertain elevation change
     for dt in [20, 5, 1]:
         dh = -0.5 * float(dt)
         value = model.integrated_sigma(dh=dh, sigma_dh=1.0, dt=float(dt))
-        add_value(rows, f"integrated_sigma_dh_rate_0p5_dt{dt}", value, f"{value:.0f}", "kg m-3", "surrogate_model", "Discussion uncertainty examples for -0.5 m yr-1 thinning and 1 m elevation-change uncertainty")
+        add_value(rows, f"integrated_sigma_dh_rate_0p5_dt{dt}", value, f"{value:.0f}", "kg m-3", "surrogate_model", "Discussion uncertainty examples for -0.5 m yr-1 thinning and 1 m elevation change uncertainty")
 
     # Record final implications paragraph reference values
     for dt in [5, 10, 20]:
         value = final_implications[f"neutral_abs_dh_at_850_dt{dt:g}"]
-        add_value(rows, f"neutral_abs_dh_at_850_dt{dt:g}", value, f"{value:.0f}", "m", "surrogate_model", "Neutral past-change elevation change where mean is 850 kg m-3")
+        add_value(rows, f"neutral_abs_dh_at_850_dt{dt:g}", value, f"{value:.0f}", "m", "surrogate_model", "Elevation change giving a mean density of 850 kg m-3 when the past elevation change rate is zero")
     for key, label in [
-        ("sustained_thinning_mu_dh_minus10_dhp_minus0p5_dt20", "20-year thinning example with dh=-10 m and past dh=-0.5 m"),
-        ("sustained_thinning_mu_dh_minus50_dhp_minus0p5_dt20", "Large cumulative thinning example with dh=-50 m and past dh=-0.5 m"),
-        ("short_term_mu_dh_minus2_dhp_minus0p5_dt1", "Annual departure example with dh=-2 m and past dh=-0.5 m"),
-        ("short_term_mu_dh_plus2_dhp_minus0p5_dt1", "Annual departure example with dh=+2 m and past dh=-0.5 m"),
+        ("sustained_thinning_mu_dh_minus10_dhp_minus0p5_dt20", "20-year thinning example with dh=-10 m and past elevation change rate=-0.5 m yr-1"),
+        ("sustained_thinning_mu_dh_minus50_dhp_minus0p5_dt20", "Large cumulative thinning example with dh=-50 m and past elevation change rate=-0.5 m yr-1"),
+        ("short_term_mu_dh_minus2_dhp_minus0p5_dt1", "Annual departure example with dh=-2 m and past elevation change rate=-0.5 m yr-1"),
+        ("short_term_mu_dh_plus2_dhp_minus0p5_dt1", "Annual departure example with dh=+2 m and past elevation change rate=-0.5 m yr-1"),
     ]:
         value = final_implications[key]
         add_value(rows, key, value, f"{value:.0f}", "kg m-3", "surrogate_model", label)
 
-    # Record only the idealized population values used in the discussion.
-    # The regional value is the volume-change-weighted value, not the
-    # independent-error equivalent.
+    # Record the individual and regional uncertainties used in the discussion
+    # Regional uncertainty is weighted by the absolute volume change
     for catalog_key, source_key, label in [
-        ("mean_individual_sigma", "mean_individual_sigma", "Mean individual-glacier density uncertainty in idealized population"),
+        ("mean_individual_sigma", "mean_individual_sigma", "Mean density uncertainty for individual glaciers in the idealized population"),
         (
             "regional_volume_weighted_sigma",
             "volume_weighted_mean_sigma",
-            "Regional volume-change-weighted density uncertainty in idealized population",
+            "Regional density uncertainty weighted by absolute volume change in the idealized population",
         ),
     ]:
         value = idealized_population[source_key]
@@ -1405,23 +1158,21 @@ def build_manuscript_catalog(
     # Record temporal correlation examples
     for lag in [1, 2, 5]:
         value = temporal_display_corr(lag).item()
-        add_value(rows, f"temporal_corr_lag{lag}", value, f"{100 * value:.0f}", "%", "correlation_model", "Temporal error-correlation examples")
+        add_value(rows, f"temporal_corr_lag{lag}", value, f"{100 * value:.0f}", "%", "correlation_model", "Temporal error correlation examples")
 
-    # Record agreement metrics by scale and temporal-closure mode. The
-    # manuscript catalog keeps only weighted variance explained, bias and
-    # CI-hit fractions; stratified agreement diagnostics are rendered by the
-    # separate LaTeX table script.
+    # Record weighted explained variance, bias and confidence interval overlap
+    # Include glacier and regional estimates before and after temporal reconciliation
     add_agreement_catalog_values(
         rows,
         glacier_period_agreement_modes,
         "glacier_scale",
-        "Glacier-scale",
+        "Glacier scale",
     )
     add_agreement_catalog_values(
         rows,
         regional_period_agreement_modes,
         "regional_scale",
-        "Regional-scale",
+        "Regional scale",
     )
 
     # Record Hugonnet 2021 application values
@@ -1429,24 +1180,22 @@ def build_manuscript_catalog(
     if not h20.empty:
         h20 = h20.iloc[0]
         for key, col, units, fmt, label in [
-            ("hugonnet_global_old_mass_rate_2000_2020", "old_mass_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global mass-change rate with 850 kg m-3"),
-            ("hugonnet_global_surrogate_mass_rate_2000_2020", "surrogate_mass_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global mass-change rate with the surrogate"),
-            ("hugonnet_global_mass_rate_difference_2000_2020", "mass_rate_difference_gt_yr", "Gt yr-1", "{:.1f}", "Global mass-change-rate difference"),
-            ("hugonnet_global_surrogate_rho_2000_2020", "surrogate_rho_mean_kg_m3", "kg m-3", "{:.0f}", "Global surrogate effective density applied to the external Hugonnet/WW-TVOL 2000--2020 volume-change product"),
+            ("hugonnet_global_old_mass_rate_2000_2020", "old_mass_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global mass change rate with 850 kg m-3"),
+            ("hugonnet_global_surrogate_mass_rate_2000_2020", "surrogate_mass_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global mass change rate with the surrogate"),
+            ("hugonnet_global_mass_rate_difference_2000_2020", "mass_rate_difference_gt_yr", "Gt yr-1", "{:.1f}", "Global difference in mass change rate"),
+            ("hugonnet_global_surrogate_rho_2000_2020", "surrogate_rho_mean_kg_m3", "kg m-3", "{:.0f}", "Global surrogate effective density applied to the external Hugonnet/WW-TVOL 2000--2020 volume change product"),
             ("hugonnet_global_old_total_sigma_rate_2000_2020", "old_sigma_mass_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global total uncertainty with 850 kg m-3"),
             ("hugonnet_global_surrogate_total_sigma_rate_2000_2020", "surrogate_sigma_mass_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global total uncertainty with the surrogate"),
-            ("hugonnet_global_surrogate_total_with_ice_sigma_rate_2000_2020", "surrogate_sigma_mass_with_ice_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global total uncertainty with surrogate and ice-density floor"),
-            ("hugonnet_global_old_density_sigma_rate_2000_2020", "old_density_only_sigma_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global density-only uncertainty with 850 kg m-3"),
-            ("hugonnet_global_surrogate_density_sigma_rate_2000_2020", "surrogate_density_only_sigma_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global surrogate density-only uncertainty"),
-            ("hugonnet_global_ice_density_sigma_rate_2000_2020", "ice_density_sigma_rate_gt_yr", "Gt yr-1", "{:.2f}", "Global external ice-density uncertainty"),
-            ("hugonnet_global_surrogate_density_plus_ice_sigma_rate_2000_2020", "surrogate_density_plus_ice_sigma_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global surrogate density plus ice-density uncertainty"),
+            ("hugonnet_global_surrogate_total_with_ice_sigma_rate_2000_2020", "surrogate_sigma_mass_with_ice_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global total uncertainty with surrogate and ice density floor"),
+            ("hugonnet_global_old_density_sigma_rate_2000_2020", "old_density_only_sigma_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global uncertainty from density alone with 850 kg m-3"),
+            ("hugonnet_global_surrogate_density_sigma_rate_2000_2020", "surrogate_density_only_sigma_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global surrogate uncertainty from density alone"),
+            ("hugonnet_global_ice_density_sigma_rate_2000_2020", "ice_density_sigma_rate_gt_yr", "Gt yr-1", "{:.2f}", "Global external ice density uncertainty"),
+            ("hugonnet_global_surrogate_density_plus_ice_sigma_rate_2000_2020", "surrogate_density_plus_ice_sigma_rate_gt_yr", "Gt yr-1", "{:.1f}", "Global surrogate density plus ice density uncertainty"),
         ]:
             value = float(h20[col])
             add_value(rows, key, value, fmt.format(value), units, "hugonnet_application", label)
 
-        # Record abstract-facing aliases for the revised Hugonnet 2021
-        # application sentence. These are duplicated from the detailed
-        # application rows so that abstract numbers can be checked directly.
+        # Include the Hugonnet application values needed for the abstract
         old_rate = float(h20["old_mass_rate_gt_yr"])
         surrogate_rate = float(h20["surrogate_mass_rate_gt_yr"])
         mass_loss_increase = 100.0 * (abs(surrogate_rate) - abs(old_rate)) / abs(old_rate)
@@ -1455,20 +1204,20 @@ def build_manuscript_catalog(
         density_uncertainty_reduction = 100.0 * (old_density_sigma - surrogate_density_sigma) / old_density_sigma
         add_value(rows, "hugonnet_global_fixed_effective_density_reference", 850.0, "850", "kg m-3", "hugonnet_application", "Discussion comparison with previously used conversion")
         add_value(rows, "hugonnet_global_fixed_effective_density_reference_uncertainty", 60.0, "60", "kg m-3", "hugonnet_application", "Discussion comparison with previously used conversion")
-        add_value(rows, "hugonnet_global_mass_loss_increase_percent_2000_2020", mass_loss_increase, f"{mass_loss_increase:.1f}", "%", "hugonnet_application", "Global mass-loss increase from surrogate relative to 850 kg m-3")
-        add_value(rows, "hugonnet_global_density_uncertainty_reduction_percent_2000_2020", density_uncertainty_reduction, f"{density_uncertainty_reduction:.0f}", "%", "hugonnet_application", "Reduction in effective-density uncertainty relative to 60 kg m-3")
+        add_value(rows, "hugonnet_global_mass_loss_increase_percent_2000_2020", mass_loss_increase, f"{mass_loss_increase:.1f}", "%", "hugonnet_application", "Global increase in mass change magnitude from surrogate relative to 850 kg m-3")
+        add_value(rows, "hugonnet_global_density_uncertainty_reduction_percent_2000_2020", density_uncertainty_reduction, f"{density_uncertainty_reduction:.0f}", "%", "hugonnet_application", "Reduction in effective density uncertainty relative to 60 kg m-3")
         add_value(rows, "abstract_fixed_effective_density_reference", 850.0, "850", "kg m-3", "hugonnet_application", "Abstract comparison with previously used conversion")
         add_value(rows, "abstract_fixed_effective_density_reference_uncertainty", 60.0, "60", "kg m-3", "hugonnet_application", "Abstract comparison with previously used conversion")
-        add_value(rows, "abstract_hugonnet_mass_loss_increase_percent", mass_loss_increase, f"{mass_loss_increase:.1f}", "%", "hugonnet_application", "Abstract global mass-loss increase from surrogate relative to 850 kg m-3")
-        add_value(rows, "abstract_hugonnet_density_uncertainty_reduction_percent", density_uncertainty_reduction, f"{density_uncertainty_reduction:.0f}", "%", "hugonnet_application", "Abstract reduction in effective-density uncertainty relative to 60 kg m-3")
-        add_value(rows, "abstract_hugonnet_surrogate_rho_2000_2020", float(h20["surrogate_rho_mean_kg_m3"]), f"{float(h20['surrogate_rho_mean_kg_m3']):.0f}", "kg m-3", "hugonnet_application", "Abstract global effective density applied to the external Hugonnet/WW-TVOL 2000--2020 volume-change product")
-        add_value(rows, "abstract_hugonnet_surrogate_density_sigma_rho_equiv_2000_2020", float(h20["surrogate_density_only_sigma_rho_equiv_kg_m3"]), f"{float(h20['surrogate_density_only_sigma_rho_equiv_kg_m3']):.0f}", "kg m-3", "hugonnet_application", "Abstract equivalent effective-density uncertainty for the external Hugonnet/WW-TVOL 2000--2020 product")
+        add_value(rows, "abstract_hugonnet_mass_loss_increase_percent", mass_loss_increase, f"{mass_loss_increase:.1f}", "%", "hugonnet_application", "Abstract global increase in mass change magnitude from surrogate relative to 850 kg m-3")
+        add_value(rows, "abstract_hugonnet_density_uncertainty_reduction_percent", density_uncertainty_reduction, f"{density_uncertainty_reduction:.0f}", "%", "hugonnet_application", "Abstract reduction in effective density uncertainty relative to 60 kg m-3")
+        add_value(rows, "abstract_hugonnet_surrogate_rho_2000_2020", float(h20["surrogate_rho_mean_kg_m3"]), f"{float(h20['surrogate_rho_mean_kg_m3']):.0f}", "kg m-3", "hugonnet_application", "Abstract global effective density applied to the external Hugonnet/WW-TVOL 2000--2020 volume change product")
+        add_value(rows, "abstract_hugonnet_surrogate_density_sigma_rho_equiv_2000_2020", float(h20["surrogate_density_only_sigma_rho_equiv_kg_m3"]), f"{float(h20['surrogate_density_only_sigma_rho_equiv_kg_m3']):.0f}", "kg m-3", "hugonnet_application", "Abstract equivalent effective density uncertainty for the external Hugonnet/WW-TVOL 2000--2020 product")
         volume_rate = math.sqrt(max(0.0, float(h20["surrogate_sigma_mass_with_ice_rate_gt_yr"]) ** 2 - float(h20["surrogate_density_plus_ice_sigma_rate_gt_yr"]) ** 2))
         volume_share = 100.0 * volume_rate**2 / float(h20["surrogate_sigma_mass_with_ice_rate_gt_yr"]) ** 2
         density_share = 100.0 - volume_share
-        add_value(rows, "hugonnet_global_surrogate_volume_sigma_rate_2000_2020", volume_rate, f"{volume_rate:.1f}", "Gt yr-1", "hugonnet_application", "Global volume-change contribution to surrogate total uncertainty")
-        add_value(rows, "hugonnet_global_surrogate_volume_uncertainty_variance_share_2000_2020", volume_share, f"{volume_share:.0f}", "%", "hugonnet_application", "Global variance share from volume-change uncertainty")
-        add_value(rows, "hugonnet_global_surrogate_density_uncertainty_variance_share_2000_2020", density_share, f"{density_share:.0f}", "%", "hugonnet_application", "Global variance share from density plus ice-density uncertainty")
+        add_value(rows, "hugonnet_global_surrogate_volume_sigma_rate_2000_2020", volume_rate, f"{volume_rate:.1f}", "Gt yr-1", "hugonnet_application", "Global volume change contribution to surrogate total uncertainty")
+        add_value(rows, "hugonnet_global_surrogate_volume_uncertainty_variance_share_2000_2020", volume_share, f"{volume_share:.0f}", "%", "hugonnet_application", "Global variance share from volume change uncertainty")
+        add_value(rows, "hugonnet_global_surrogate_density_uncertainty_variance_share_2000_2020", density_share, f"{density_share:.0f}", "%", "hugonnet_application", "Global variance share from density plus ice density uncertainty")
         if "old_loss_acceleration_gt_yr" in h20.index:
             add_value(rows, "hugonnet_global_old_loss_acceleration", float(h20["old_loss_acceleration_gt_yr"]), f"{float(h20['old_loss_acceleration_gt_yr']):.1f}", "Gt yr-1 decade-1", "hugonnet_application", "Global loss acceleration between 2000--2010 and 2010--2020")
             add_value(rows, "hugonnet_global_surrogate_loss_acceleration", float(h20["surrogate_loss_acceleration_gt_yr"]), f"{float(h20['surrogate_loss_acceleration_gt_yr']):.1f}", "Gt yr-1 decade-1", "hugonnet_application", "Global loss acceleration between 2000--2010 and 2010--2020")
@@ -1486,8 +1235,8 @@ def build_manuscript_catalog(
             rel_change = 100.0 * (surrogate_loss - old_loss) / old_loss
         rel_change = rel_change.replace([np.inf, -np.inf], np.nan).dropna()
         if not rel_change.empty:
-            add_value(rows, "hugonnet_regional_mass_loss_increase_percent_min_2000_2020", float(rel_change.min()), f"{rel_change.min():.1f}", "%", "hugonnet_application", "Minimum regional mass-loss increase from surrogate relative to 850 kg m-3")
-            add_value(rows, "hugonnet_regional_mass_loss_increase_percent_max_2000_2020", float(rel_change.max()), f"{rel_change.max():.1f}", "%", "hugonnet_application", "Maximum regional mass-loss increase from surrogate relative to 850 kg m-3")
+            add_value(rows, "hugonnet_regional_mass_loss_increase_percent_min_2000_2020", float(rel_change.min()), f"{rel_change.min():.1f}", "%", "hugonnet_application", "Minimum regional increase in mass change magnitude from surrogate relative to 850 kg m-3")
+            add_value(rows, "hugonnet_regional_mass_loss_increase_percent_max_2000_2020", float(rel_change.max()), f"{rel_change.max():.1f}", "%", "hugonnet_application", "Maximum regional increase in mass change magnitude from surrogate relative to 850 kg m-3")
 
         region_names = {
             "01+02": "Alaska and Western North America",
@@ -1515,7 +1264,7 @@ def build_manuscript_catalog(
         for rank, row in enumerate(ranked.head(4).itertuples(index=False), start=1):
             region_label = str(row.region_label)
             region_name = region_names.get(region_label, region_label)
-            add_value(rows, f"hugonnet_regional_adjustment_rank{rank}_region_2000_2020", region_name, region_name, "", "hugonnet_application", "Region with one of the largest absolute mass-rate adjustments")
+            add_value(rows, f"hugonnet_regional_adjustment_rank{rank}_region_2000_2020", region_name, region_name, "", "hugonnet_application", "Region with one of the largest absolute mass change rate adjustments")
             add_value(
                 rows,
                 f"hugonnet_regional_adjustment_rank{rank}_mass_rate_difference_2000_2020",
@@ -1523,7 +1272,7 @@ def build_manuscript_catalog(
                 f"{row.mass_rate_difference_gt_yr:.1f}",
                 "Gt yr-1",
                 "hugonnet_application",
-                "Largest absolute regional mass-rate adjustment from surrogate relative to 850 kg m-3",
+                "Largest absolute regional mass change rate adjustment from surrogate relative to 850 kg m-3",
             )
 
     for row in hugonnet_glacier_changes.itertuples(index=False):
@@ -1534,22 +1283,22 @@ def build_manuscript_catalog(
                 row.volume_weighted_mu_change_kg_m3,
                 "kg m-3",
                 "{:.0f}",
-                "Volume-change-weighted per-glacier change in effective density relative to 850 kg m-3",
+                "Mean change in glacier effective density relative to 850 kg m-3, weighted by absolute volume change",
             ),
             (
                 "volume_weighted_sigma_rho",
                 60.0 + row.volume_weighted_sigma_rho_change_kg_m3,
                 "kg m-3",
                 "{:.0f}",
-                "Volume-change-weighted per-glacier surrogate density uncertainty",
+                "Mean glacier density uncertainty weighted by absolute volume change",
             ),
         ]:
             add_value(rows, f"hugonnet_per_glacier_dt{dt}_{suffix}", float(value), fmt.format(float(value)), units, "hugonnet_application", label)
 
-    # Record past-change memory and temporal-closure example values
+    # Record past elevation change rate memory and temporal closure example values
     for years in [5, 10]:
-        value = 100.0 * past_change_weight_fraction(float(model.params["T_p"]), years)
-        add_value(rows, f"past_dh_weight_{years}yr", value, f"{value:.0f}", "%", "surrogate_parameters", "Past elevation-change predictor memory")
+        value = 100.0 * past_change_weight_fraction(float(model.params["memory_tau_years"]), years)
+        add_value(rows, f"past_dh_weight_{years}yr", value, f"{value:.0f}", "%", "surrogate_parameters", "Fraction of past elevation change rate weights within the stated years")
     closure = temporal_closure_summary(model)
     closure_lookup = {row.estimate: row for row in closure.itertuples(index=False)}
     direct_full = closure_lookup["direct full-period surrogate"]
@@ -1557,11 +1306,11 @@ def build_manuscript_catalog(
     closed_full = closure_lookup["temporally reconciled full period"]
     mismatch_percent = 100.0 * (annual_sum.dM_Gt - direct_full.dM_Gt) / abs(direct_full.dM_Gt)
     closed_diff_percent = 100.0 * (closed_full.dM_Gt - direct_full.dM_Gt) / abs(direct_full.dM_Gt)
-    add_value(rows, "temporal_closure_independent_annual_mismatch", mismatch_percent, f"{abs(mismatch_percent):.0f}", "%", "surrogate_model", "Synthetic temporal-closure example")
-    add_value(rows, "temporal_closure_closed_full_difference", closed_diff_percent, f"{abs(closed_diff_percent):.0f}", "%", "surrogate_model", "Synthetic temporal-closure example")
-    add_value(rows, "temporal_closure_annual_equiv_density", annual_sum.mu_or_equiv_rho_kg_m3, f"{annual_sum.mu_or_equiv_rho_kg_m3:.0f}", "kg m-3", "surrogate_model", "Synthetic temporal-closure example")
-    add_value(rows, "temporal_closure_direct_full_density", direct_full.mu_or_equiv_rho_kg_m3, f"{direct_full.mu_or_equiv_rho_kg_m3:.0f}", "kg m-3", "surrogate_model", "Synthetic temporal-closure example")
-    add_value(rows, "temporal_closure_closed_full_density", closed_full.mu_or_equiv_rho_kg_m3, f"{closed_full.mu_or_equiv_rho_kg_m3:.0f}", "kg m-3", "surrogate_model", "Synthetic temporal-closure example")
+    add_value(rows, "temporal_closure_independent_annual_mismatch", mismatch_percent, f"{abs(mismatch_percent):.0f}", "%", "surrogate_model", "Synthetic temporal closure example")
+    add_value(rows, "temporal_closure_closed_full_difference", closed_diff_percent, f"{abs(closed_diff_percent):.0f}", "%", "surrogate_model", "Synthetic temporal closure example")
+    add_value(rows, "temporal_closure_annual_equiv_density", annual_sum.mu_or_equiv_rho_kg_m3, f"{annual_sum.mu_or_equiv_rho_kg_m3:.0f}", "kg m-3", "surrogate_model", "Synthetic temporal closure example")
+    add_value(rows, "temporal_closure_direct_full_density", direct_full.mu_or_equiv_rho_kg_m3, f"{direct_full.mu_or_equiv_rho_kg_m3:.0f}", "kg m-3", "surrogate_model", "Synthetic temporal closure example")
+    add_value(rows, "temporal_closure_closed_full_density", closed_full.mu_or_equiv_rho_kg_m3, f"{closed_full.mu_or_equiv_rho_kg_m3:.0f}", "kg m-3", "surrogate_model", "Synthetic temporal closure example")
 
     # Skewness reduction is measured after removing the mean only.  Kurtosis
     # reduction is measured after the subsequent scaling by sigma.
@@ -1575,11 +1324,12 @@ def build_manuscript_catalog(
         value = float(kurt_row["reduction_percent"].iloc[0])
         add_value(rows, "kurtosis_reduction", value, f"{value:.0f}", "%", "surrogate_residuals", "Supplementary normality check")
 
-    # Record uncommented manuscript placeholder count when a manuscript file is supplied
-    if manuscript_text:
-        xx_count = len(re.findall(r"\bXX\b", manuscript_text))
-        add_value(rows, "uncommented_xx_placeholders", xx_count, f"{xx_count}", "placeholders", "manuscript_tex", "Only uncommented LaTeX text is scanned")
     return order_catalog(rows)
+
+
+###############
+# OUTPUT TABLES
+###############
 
 
 def write_markdown(
@@ -1589,7 +1339,8 @@ def write_markdown(
     region_summary: pd.DataFrame,
     catalog: pd.DataFrame,
 ) -> None:
-    """Write a compact Markdown report
+    """
+    Write a compact Markdown report
 
     :param out_path: Markdown output path
     :param input_summary: Input summary table
@@ -1598,6 +1349,7 @@ def write_markdown(
     :param catalog: Manuscript value catalog
     """
     def markdown_table(df: pd.DataFrame, max_rows: int | None = None) -> str:
+        """Format a table as Markdown, leaving missing values blank."""
         frame = df.head(max_rows).copy() if max_rows is not None else df.copy()
         for col in frame.columns:
             if pd.api.types.is_float_dtype(frame[col]):
@@ -1618,13 +1370,21 @@ def write_markdown(
         f.write(markdown_table(input_summary))
         f.write("\n\n## Period Summary\n\n")
         f.write(markdown_table(period_summary, max_rows=25))
-        f.write("\n\n## Regional Full-Period Summary\n\n")
+        f.write("\n\n## Regional Summary over the Full Period\n\n")
         f.write(markdown_table(region_summary))
         f.write("\n")
 
 
 def run() -> dict[str, Path]:
-    """Generate all manuscript value tables
+    """
+    Generate the values to report in the manuscript and their supporting tables.
+
+    read_full_model_input() loads the calibration observations, and
+    evaluate_rows() predicts their mean density and uncertainty. We summarize
+    those predictions and read the agreement and Hugonnet application results.
+    build_manuscript_catalog() combines these results with the reference examples
+    in manuscript order. The main CSV contains the values to report; diagnostic
+    tables and write_markdown() provide the supporting calculations for review.
 
     :returns: Mapping of output labels to written paths
     """
@@ -1632,7 +1392,7 @@ def run() -> dict[str, Path]:
     outdir.mkdir(parents=True, exist_ok=True)
     variants = None if ALL_VARIANTS else VARIANTS_TO_USE
 
-    # Load surrogate parameters and full-model input
+    # Load surrogate parameters and full model input
     model = RhoSurrogate.from_files(
         parameter_path=PARAM_CSV,
         spatial_path=SPATIAL_PARAM_CSV,
@@ -1643,13 +1403,12 @@ def run() -> dict[str, Path]:
     df = read_full_model_input(DEFAULT_INPUT_CSV, variants=variants)
     df = attach_exponential_past_change(
         df,
-        tau_years=float(model.params.get("T_p", 5.0)),
-        tau_max=float(model.params.get("tau_max", 20.0)),
+        tau_years=float(model.params["memory_tau_years"]),
+        tau_max=float(model.params["tau_max"]),
     )
     evaluated = evaluate_rows(df, model)
 
-    # Build manuscript-ready tables
-    manuscript_text = read_uncommented_manuscript(MANUSCRIPT_TEX)
+    # Calculate the manuscript values and supporting summaries
     input_summary = summarize_input(evaluated)
     period_summary = summarize_model_application(evaluated)
     reference_cases = evaluate_reference_cases(model)
@@ -1680,10 +1439,9 @@ def run() -> dict[str, Path]:
         hugonnet_global,
         hugonnet_regional,
         hugonnet_glacier_changes,
-        manuscript_text,
     )
 
-    # Define row-level sample output
+    # Select observation columns for a small sample of the evaluated data
     sample_cols = [
         "rgiid",
         VARIANT_COL,

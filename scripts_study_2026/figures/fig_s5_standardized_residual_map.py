@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Supplementary figure S5: Fig. 6-style map of full-period standardized residuals."""
+"""Supplementary figure S5: world tiled map of full-period standardized residuals."""
 
 from __future__ import annotations
 

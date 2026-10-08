@@ -1,29 +1,6 @@
-
 #!/usr/bin/env python3
 """
-Spatial and temporal correlation of standardized effective-density residuals.
-
-This version fits one duration-invariant spatial correlation model to direct
-pair-product estimates of the standardized effective-density residuals.
-
-Key assumptions and outputs
----------------------------
-- Residual variants (iteration9, sensmin, sensmax) are split before pair
-  products are computed.
-- Spatial correlations are estimated within one variant and one exact
-  observation interval from products z_rho(g1) * z_rho(g2).
-- Exact-interval estimates are aggregated by target period length for
-  diagnostics, but one common spatial model is fitted across all selected
-  period lengths.
-- The fitted spatial model contains a nugget, a 200-km exponential component,
-  and a 1500-km exponential component with non-negative fractions summing to 1.
-- Temporal correlations are estimated from annual residuals with a simple
-  nugget plus exponential correlation model for diagnostic purposes. The
-  operational covariance model assumes zero temporal covariance at non-zero lag.
-- The fitted spatial function is the elementary standardized-density-residual
-  correlation. Exact propagation across arbitrary temporal partitions must be
-  performed in mass-error covariance space by summing same-elementary-period
-  covariance contributions.
+Estimate and fit spatial and temporal correlation of standardized effective density residuals.
 """
 
 from __future__ import annotations
@@ -82,7 +59,7 @@ OUT_SPATIAL_RAW_FIG = OUT_DIR / f"{RUN_LABEL}_FIG_spatial_common_fit_residuals.p
 WRITE_FIT_DIAGNOSTIC_PLOTS = True
 UPDATE_PACKAGED_PARAMS = True
 REUSE_EMPIRICAL_ESTIMATES = False
-PACKAGED_PARAM_JSON = STUDY_DIR.parent / "glacier_density_surrogate" / "parameters" / "final_parameters.json"
+PACKAGED_PARAM_JSON = STUDY_DIR.parent / "glacier_density_surrogate" / "final_parameters.json"
 
 # =============================================================================
 # Input columns and controls
@@ -1025,8 +1002,8 @@ def spatial_corr_model(d_km: np.ndarray, params: dict) -> np.ndarray:
     n_components = int(float(params.get("n_spatial_components", 2)))
     out = np.zeros_like(d, dtype=float)
     for i in range(1, n_components + 1):
-        q = float(params.get(f"q{i}_range_fraction", params.get("q1_short_range_fraction" if i == 1 else "q2_long_range_fraction", 0.0)))
-        r = float(params.get(f"r{i}_km", params.get("r1_km" if i == 1 else "r2_km", np.nan)))
+        q = float(params[f"q{i}_range_fraction"])
+        r = float(params[f"r{i}_km"])
         if np.isfinite(r) and q > 0:
             out = out + q * spatial_component(d, r, form)
     return np.clip(out, 0.0, 1.0)
@@ -1071,8 +1048,6 @@ def _fit_spatial_candidate(
             "spatial_corr_form": form,
             "n_spatial_components": int(n_components),
             "q0_nugget_fraction": float(q[0]),
-            "q1_short_range_fraction": float(q[1]),
-            "q2_long_range_fraction": float(q[2]) if n_components >= 2 else 0.0,
             "r1_km": float(ranges[0]),
             "r2_km": float(ranges[1]) if n_components >= 2 else np.nan,
             "q1_range_fraction": float(q[1]),
@@ -1443,39 +1418,11 @@ def update_packaged_correlation_params(spatial_out: dict, temporal_out: dict) ->
     with open(PACKAGED_PARAM_JSON) as f:
         params = json.load(f)
 
-    spatial_keys = [
-        "spatial_corr_form",
-        "n_spatial_components",
-        "q0_nugget_fraction",
-        "q1_range_fraction",
-        "q2_range_fraction",
-        "q3_range_fraction",
-        "q1_short_range_fraction",
-        "q2_long_range_fraction",
-        "r1_km",
-        "r2_km",
-        "r3_km",
-    ]
-    for key in spatial_keys:
-        if key in spatial_out:
-            params[key] = spatial_out[key]
+    from glacier_density_surrogate.surrogate import SPATIAL_KEYS, TEMPORAL_KEYS
 
-    params.update(
-        {
-            "temporal_model_form": temporal_out["temporal_model_form"],
-            "temporal_nugget": temporal_out["empirical_nugget"],
-            "amplitude_after_nugget": temporal_out["empirical_sill"],
-            "temporal_timescale_yr": temporal_out["empirical_range_yr"],
-            "temporal_exponent": temporal_out["empirical_exponent"],
-            "applied_temporal_correlation_at_positive_lag": temporal_out[
-                "applied_temporal_correlation_at_positive_lag"
-            ],
-            "applied_temporal_covariance_assumption": temporal_out[
-                "applied_temporal_covariance_assumption"
-            ],
-            "semivariogramestimator": temporal_out["semivariogram_estimator"],
-        }
-    )
+    # Copy the final names directly; diagnostic metadata stays in the fitting outputs
+    params.update({key: value for key, value in spatial_out.items() if key in SPATIAL_KEYS})
+    params.update({key: value for key, value in temporal_out.items() if key in TEMPORAL_KEYS})
 
     with open(PACKAGED_PARAM_JSON, "w") as f:
         json.dump(params, f, indent=2, sort_keys=True)
@@ -1776,9 +1723,7 @@ def main() -> None:
         "empirical_nugget": float(temporal_params[0]),
         "empirical_sill": float(1.0 - temporal_params[0]),
         "empirical_range_yr": float(temporal_params[1]),
-        "empirical_timescale_yr": float(temporal_params[1]),
         "empirical_exponent": 1.0,
-        "empirical_amplitude_after_nugget": float(1.0 - temporal_params[0]),
         "n_fit_bins": int(len(temporal_agg)),
         "applied_temporal_correlation_at_positive_lag": 0.0,
         "applied_temporal_covariance_assumption": "zero_for_nonzero_lags",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main figure 6: tile-level glacierized area and effective density."""
+"""Main figure 6: world tiled effective density."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def first_existing(columns: pd.Index, candidates: list[str], required: bool = Tr
 def infer_period_filter(df: pd.DataFrame) -> tuple[float, float]:
     """Infer the representative full-period interval
 
-    :param df: Full-model input table
+    :param df: Full model input table
     """
     if START_DATE is not None and END_DATE is not None:
         return float(START_DATE), float(END_DATE)
@@ -123,7 +123,7 @@ def tile_center(tile_lat: np.ndarray, tile_lon: np.ndarray) -> tuple[np.ndarray,
 
 
 def read_full_model_input() -> pd.DataFrame:
-    """Read the full-model input columns needed for aggregation"""
+    """Read the full model input columns needed for aggregation"""
     header = pd.read_csv(INPUT_CSV, nrows=0).columns
     lat_col = first_existing(header, ["lat", "cenlat", "center_lat"])
     lon_col = first_existing(header, ["lon", "cenlon", "center_lon"])
@@ -162,13 +162,13 @@ def aggregate_tiles() -> pd.DataFrame:
     )
     df = df.loc[ok].copy()
 
-    # Compute volume weights and tile origins
+    # Compute volume change weights and tile origins
     df["dV_proxy"] = df["area"] * df["b"] / df["rho"]
     df["abs_dV_weight"] = np.abs(df["dV_proxy"])
     df["rho_num"] = df["rho"] * df["abs_dV_weight"]
     df["tile_lat"], df["tile_lon"] = representative_tile_origin(df["lat"].to_numpy(float), df["lon"].to_numpy(float))
 
-    # Aggregate by tile with volume weighting
+    # Aggregate by tile with volume change weighting
     out = (
         df.groupby(["tile_lat", "tile_lon"], sort=True, observed=True)
         .agg(

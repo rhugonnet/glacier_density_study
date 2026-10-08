@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Command-line interface for the effective-density surrogate."""
+"""Command-line tool to apply the effective density surrogate to direct observations or CSV files."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -13,47 +14,51 @@ from .surrogate import RhoSurrogate, make_dh_error_correlation
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the command-line parser
-
-    :returns: Configured argument parser
     """
+    Define the CSV and single-period command-line options.
+
+    :returns: Configured argument parser.
+    """
+
     parser = argparse.ArgumentParser(
         prog="glacier-density-surrogate",
-        description="Estimate effective density from glacier elevation-change observations.",
+        description="Estimate effective density from glacier elevation change observations.",
     )
     parser.add_argument("input", nargs="?", help="Input CSV with period rows")
     parser.add_argument("output", nargs="?", help="Output CSV for surrogate predictions")
-    parser.add_argument("--dh", type=float, help="Single-period elevation change in metres")
-    parser.add_argument("--sigma-dh", type=float, default=0.0, help="Single-period elevation-change uncertainty in metres")
-    parser.add_argument("--dt", type=float, default=1.0, help="Single-period duration in years")
-    parser.add_argument("--past-dh", type=float, default=None, help="Single-period past elevation change in metres")
-    parser.add_argument("--sigma-past-dh", type=float, default=None, help="Single-period past elevation-change uncertainty in metres")
+    parser.add_argument("--id-col", default=None, help="Glacier identifier column; detects glacier_id or rgiid")
+    parser.add_argument("--regional-output", default=None, help="Optional CSV for regional mass change and uncertainty")
+    parser.add_argument("--dh", type=float, help="Elevation change over the observation period in metres")
+    parser.add_argument("--sigma-dh", type=float, default=0.0, help="Elevation change uncertainty in metres")
+    parser.add_argument("--dt", type=float, help="Observation period duration in years; required with --dh")
+    parser.add_argument("--past-dh", type=float, default=None, help="Past elevation change rate in m yr-1")
+    parser.add_argument("--sigma-past-dh", type=float, default=None, help="Past elevation change rate uncertainty in m yr-1")
     parser.add_argument("--area-m2", type=float, default=None, help="Constant glacier area in square metres")
-    parser.add_argument("--start-col", default=None, help="Input start-year column")
-    parser.add_argument("--end-col", default=None, help="Input end-year column")
-    parser.add_argument("--dt-col", default=None, help="Input period-length column")
-    parser.add_argument("--dh-col", default=None, help="Input elevation-change column")
-    parser.add_argument("--sigma-dh-col", default=None, help="Input elevation-change uncertainty column")
-    parser.add_argument("--past-dh-col", default=None, help="Input past elevation-change column")
-    parser.add_argument("--sigma-past-dh-col", default=None, help="Input past elevation-change uncertainty column")
+    parser.add_argument("--start-col", default=None, help="Input column for the observation start year")
+    parser.add_argument("--end-col", default=None, help="Input column for the observation end year")
+    parser.add_argument("--dt-col", default=None, help="Input period duration column")
+    parser.add_argument("--dh-col", default=None, help="Input elevation change column")
+    parser.add_argument("--sigma-dh-col", default=None, help="Input elevation change uncertainty column")
+    parser.add_argument("--past-dh-col", default=None, help="Input past elevation change rate column")
+    parser.add_argument("--sigma-past-dh-col", default=None, help="Input past elevation change rate uncertainty column")
     parser.add_argument("--area-col", default=None, help="Input area column")
     parser.add_argument(
         "--past-missing",
         choices=["current", "zero"],
         default="current",
-        help="Assumption when past elevation change is unavailable",
+        help="Assumption when past elevation change rate is unavailable",
     )
     parser.add_argument(
         "--past-error-factor",
         type=float,
         default=2.0,
-        help="Multiplier applied to sigma_dh when defaulting sigma_past_dh",
+        help="Multiplier for sigma_dh / dt when past elevation change rate uncertainty is missing",
     )
     parser.add_argument(
         "--dh-error-corr-form",
         choices=["none", "exponential", "gaussian", "spherical"],
         default="none",
-        help="Temporal correlation form for elevation-change errors",
+        help="Temporal correlation form for elevation change errors",
     )
     parser.add_argument("--dh-error-corr-range", type=float, default=None, help="Correlation range in years")
     parser.add_argument(
@@ -65,14 +70,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the CLI
-
-    :param argv: Optional argument vector
     """
-    args = build_parser().parse_args(argv)
+    Print a single prediction as JSON or write predictions from a CSV file.
+
+    :param argv: Command-line arguments; None reads the process arguments.
+    :returns: Zero after a successful prediction.
+    """
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.dh is not None and args.dt is None:
+        parser.error("--dt is required with --dh")
+    if args.regional_output is not None:
+        if args.dh is not None:
+            parser.error("--regional-output requires glacier observations in a CSV")
+        if args.output is not None and Path(args.output).resolve() == Path(args.regional_output).resolve():
+            parser.error("Glacier and regional outputs must use different paths")
     model = RhoSurrogate()
 
-    # Run a single-period prediction when direct values are supplied
+    # Predict one period when direct observations are supplied
     if args.dh is not None:
         result = model.predict(
             dh=args.dh,
@@ -84,16 +100,22 @@ def main(argv: list[str] | None = None) -> int:
             past_missing=args.past_missing,
             past_error_factor=args.past_error_factor,
         )
-        print(json.dumps(result, indent=2, sort_keys=True))
+        # Undefined density at zero volume change is null in portable JSON; mass change remains finite
+        json_result = {
+            key: None if isinstance(value, float) and not math.isfinite(value) else value
+            for key, value in result.items()
+        }
+        print(json.dumps(json_result, indent=2, sort_keys=True, allow_nan=False))
         return 0
 
-    # Run a CSV time-series prediction otherwise
+    # Run a CSV time series prediction otherwise
     if args.input is None or args.output is None:
-        raise SystemExit("Provide input/output CSV paths, or use --dh for a single-period prediction")
-    df = pd.read_csv(args.input)
+        raise SystemExit("Provide input/output CSV paths, or use --dh and --dt to predict one period")
+    observations = pd.read_csv(args.input)
     corr = make_dh_error_correlation(args.dh_error_corr_form, args.dh_error_corr_range)
-    out = model.predict_timeseries(
-        df,
+    predictions = model.predict_timeseries(
+        observations,
+        id_col=args.id_col,
         start_col=args.start_col,
         end_col=args.end_col,
         dh_col=args.dh_col,
@@ -108,10 +130,20 @@ def main(argv: list[str] | None = None) -> int:
         past_error_factor=args.past_error_factor,
         dh_error_corr=corr,
     )
+
+    # Validate regional coverage and propagate uncertainty before writing either result
+    regional = None
+    if args.regional_output is not None:
+        regional = model.aggregate_regions(predictions, id_col=args.id_col)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(output, index=False)
-    print(f"[done] Wrote surrogate predictions: {output}")
+    predictions.to_csv(output, index=False)
+    print(f"Wrote surrogate predictions to {output}")
+    if regional is not None:
+        regional_output = Path(args.regional_output)
+        regional_output.parent.mkdir(parents=True, exist_ok=True)
+        regional.to_csv(regional_output, index=False)
+        print(f"Wrote regional predictions to {regional_output}")
     return 0
 
 

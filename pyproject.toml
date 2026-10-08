@@ -12,8 +12,8 @@ description = "Surrogate model for converting glacier volume change to mass chan
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-  {name = "Matthias Huss"},
   {name = "Romain Hugonnet"},
+  {name = "Matthias Huss"},
   {name = "Johannes Marian Landmann"},
   {name = "Daniel Farinotti"},
 ]
@@ -40,4 +40,4 @@ include = ["glacier_density_surrogate*"]
 
 
 [tool.setuptools.package-data]
-glacier_density_surrogate = ["parameters/*.json"]
+glacier_density_surrogate = ["final_parameters.json"]

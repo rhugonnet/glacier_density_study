@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a LaTeX table of closed-mode agreement by category."""
+"""Script to generate Table S1 in LaTeX."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ PERIOD_LABELS = {
 
 
 def ci_weighted_column(table: pd.DataFrame, scale: str) -> str:
-    """Return the weighted CI-hit fraction column for one table.
+    """Select the weighted confidence interval overlap column for one table.
 
     :param table: Agreement summary table
     :param scale: ``glacier`` or ``regional``
@@ -51,7 +51,7 @@ def ci_weighted_column(table: pd.DataFrame, scale: str) -> str:
         return "ci95_intersection_weighted_fraction"
     if "ci95_intersection_independent_weighted_fraction" in table.columns:
         return "ci95_intersection_independent_weighted_fraction"
-    raise KeyError(f"No weighted CI-hit fraction column found for {scale} table")
+    raise KeyError(f"No weighted confidence interval overlap column found for {scale} table")
 
 
 def count_column(table: pd.DataFrame) -> str:
@@ -73,15 +73,7 @@ def read_closed_category_rows(
     scale: str,
     scale_label: str,
 ) -> pd.DataFrame:
-    """Read one category summary and return normalized closed-mode table rows.
-
-    :param path: Category summary CSV
-    :param category_col: Category column name
-    :param labels: Category labels in output order
-    :param group_label: Human-readable group label
-    :param scale: Stable scale key
-    :param scale_label: Human-readable scale label
-    """
+    """Read one category summary and return normalized table rows."""
     if not path.exists():
         raise FileNotFoundError(
             "Missing agreement category output. Run "
@@ -250,7 +242,7 @@ def write_latex(table: pd.DataFrame, path: Path) -> None:
 
 
 def run() -> dict[str, Path]:
-    """Generate closed-mode category agreement CSV and LaTeX outputs."""
+    """Generate category agreement CSV and LaTeX outputs."""
     AGREEMENT_DIR.mkdir(parents=True, exist_ok=True)
     table = build_table()
     table.drop(columns=["group_order", "class_order", "scale_order"]).to_csv(OUT_CSV, index=False)

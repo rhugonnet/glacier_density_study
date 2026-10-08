@@ -103,10 +103,10 @@ def compute_grid(
     """Compute the uncertain-dh integration grid
 
     :param model: Surrogate model instance
-    :param dh_values: Elevation-change support
-    :param sigma_values: Elevation-change uncertainty support
-    :param dh_p: Past elevation-change rate
-    :param sigma_dh_p: Past elevation-change-rate uncertainty
+    :param dh_values: Elevation change support
+    :param sigma_values: Elevation change uncertainty support
+    :param dh_p: Past elevation change rate
+    :param sigma_dh_p: Past elevation change rate uncertainty
     :param dt: Period length in years
     """
     mean = np.empty((sigma_values.size, dh_values.size), dtype=float)

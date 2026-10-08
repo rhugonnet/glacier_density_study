@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Apply the effective-density surrogate to Hugonnet-style glacier volume changes.
+"""
+Apply the effective density surrogate to Hugonnet et al., 2021 glacier volume changes.
 
-The input files are glacier-scale cumulative elevation-change time series
-(`*_int_base*.csv`). We build 5-year elementary periods from endpoint
-differences, then derive all contiguous 5-, 10- and 20-year periods between
-2000 and 2020. The 5-year periods are the elementary periods used for temporal
-closure of the surrogate mean and uncertainty.
+The input files are per-glacier cumulative elevation change time series.
+We build 5-year elementary periods, then derive all contiguous 5-, 10- and 20-year periods between
+2000 and 2020. The 5-year periods are the elementary periods used for temporal closure of the surrogate mean and
+uncertainty.
 """
 
 from __future__ import annotations
@@ -88,19 +88,6 @@ def nearest_endpoint_dates(path: Path) -> dict[int, pd.Timestamp]:
 def parse_region_label(group: str) -> str:
     """Human-readable region group label."""
     return group.replace("_", "+")
-
-
-def haversine_distance_matrix(lat_a: np.ndarray, lon_a: np.ndarray, lat_b: np.ndarray, lon_b: np.ndarray) -> np.ndarray:
-    """Pairwise great-circle distances in kilometres."""
-    radius_km = 6371.0
-    lat1 = np.deg2rad(lat_a)[:, None]
-    lon1 = np.deg2rad(lon_a)[:, None]
-    lat2 = np.deg2rad(lat_b)[None, :]
-    lon2 = np.deg2rad(lon_b)[None, :]
-    dlat = lat1 - lat2
-    dlon = lon1 - lon2
-    a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
-    return 2.0 * radius_km * np.arcsin(np.minimum(1.0, np.sqrt(a)))
 
 
 def load_endpoint_table(group: str, path: Path) -> pd.DataFrame:
@@ -193,10 +180,10 @@ def fill_nodata_with_region_period_mean(periods: pd.DataFrame) -> pd.DataFrame:
 
 
 def attach_past_dh(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
-    """Attach past elevation-change predictor from 5-year elementary rates."""
+    """Calculate past elevation change rate from rates over five years."""
     out = periods.copy()
-    tau = float(model.params.get("T_p", 5.0))
-    tau_max = float(model.params.get("tau_max", 20.0))
+    tau = float(model.params["memory_tau_years"])
+    tau_max = float(model.params["tau_max"])
     elementary = out.loc[out["period_years"].eq(5), ["rgiid", "start_year", "end_year", "dh_m", "sigma_dh_m"]].copy()
     elementary["dh_rate_m_per_yr"] = elementary["dh_m"] / 5.0
     elementary["sigma_rate_m_per_yr"] = elementary["sigma_dh_m"] / 5.0
@@ -215,7 +202,7 @@ def attach_past_dh(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
         else:
             elem_starts = [int(s) for s in rate.columns if int(s) + 5 <= start]
             if elem_starts:
-                # The past predictor is annual-equivalent. Split each 5-year
+                # The past elevation change rate is annual-equivalent. Split each 5-year
                 # elementary rate into five equal annual substeps for memory
                 # weighting, while keeping the five substeps from one block
                 # fully correlated for uncertainty propagation.
@@ -244,7 +231,7 @@ def attach_past_dh(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
 
 
 def build_elevation_change_cache(model: RhoSurrogate) -> pd.DataFrame:
-    """Build and write the glacier-period elevation-change table."""
+    """Write elevation changes for each glacier and observation period."""
     all_periods = []
     for group, path in selected_region_files():
         print(f"[read] {group}: {path.name}", flush=True)
@@ -260,7 +247,7 @@ def build_elevation_change_cache(model: RhoSurrogate) -> pd.DataFrame:
 
 
 def read_or_build_elevation_changes(model: RhoSurrogate, rebuild_cache: bool = False) -> pd.DataFrame:
-    """Read cached glacier-period elevation changes, or rebuild them."""
+    """Read saved glacier elevation changes, or recalculate them."""
     if OUT_ELEVATION_CACHE.exists() and not rebuild_cache:
         columns = pd.read_csv(OUT_ELEVATION_CACHE, nrows=0).columns
         required = {"perc_err_cont", "past_dh_method", *[f"sigma_dh_corr_{corr}_m" for corr in VOLUME_CORR_RANGES_M]}
@@ -276,7 +263,7 @@ def read_or_build_elevation_changes(model: RhoSurrogate, rebuild_cache: bool = F
 
 
 def spatial_volume_sigma(periods: pd.DataFrame) -> dict[tuple[str, int, int], float]:
-    """Regional period volume-change uncertainty from original correlated components."""
+    """Regional period volume change uncertainty from original correlated components."""
     corr_sigma = spatially_correlated_component_sigma_by_group_period(
         periods,
         component_cols=tuple(f"sigma_dh_corr_{corr}_m" for corr in VOLUME_CORR_RANGES_M),
@@ -301,7 +288,8 @@ def spatial_volume_sigma(periods: pd.DataFrame) -> dict[tuple[str, int, int], fl
 
 
 def apply_conversions(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
-    """Apply old and surrogate conversions to glacier-period rows."""
+    """Apply the previous and surrogate conversions to each glacier and period."""
+    # Integrate uncertain predictors into density; propagate volume errors separately in main()
     out = periods.copy()
     out["dV_m3"] = out["area"] * out["dh_m"]
     out["sigma_dV_m3"] = out["area"] * out["sigma_dh_m"]
@@ -345,142 +333,6 @@ def apply_conversions(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFram
     return out
 
 
-def spatial_sigma(periods: pd.DataFrame, model: RhoSurrogate, sigma_col: str) -> dict[tuple[str, int, int], float]:
-    """Propagate density-related uncertainty spatially within each region and period."""
-    rng = np.random.default_rng(RANDOM_SEED)
-    out: dict[tuple[str, int, int], float] = {}
-    period_defs = sorted(periods[["start_year", "end_year"]].drop_duplicates().itertuples(index=False, name=None))
-    period_index = pd.MultiIndex.from_tuples(period_defs, names=["start_year", "end_year"])
-    for group, g in periods.groupby("region_group", sort=False):
-        meta = g[["rgiid", "lat", "lon"]].drop_duplicates("rgiid").reset_index(drop=True)
-        support = (
-            g.assign(period_key=pd.MultiIndex.from_frame(g[["start_year", "end_year"]]))
-            .pivot_table(index="rgiid", columns="period_key", values=sigma_col, aggfunc="first")
-            .reindex(index=meta["rgiid"], columns=period_index)
-            .fillna(0.0)
-            .to_numpy(float)
-        )
-        lat = meta["lat"].to_numpy(float)
-        lon = meta["lon"].to_numpy(float)
-        ok = np.isfinite(lat) & np.isfinite(lon)
-        support = support[ok]
-        lat = lat[ok]
-        lon = lon[ok]
-        n = len(support)
-        if n == 0:
-            continue
-        diag = np.sum(support**2, axis=0)
-        if n <= EXACT_SPATIAL_MAX_GLACIERS:
-            quad = np.zeros(support.shape[1], dtype=float)
-            for i0 in range(0, n, SPATIAL_BLOCK_SIZE):
-                i1 = min(i0 + SPATIAL_BLOCK_SIZE, n)
-                dist = haversine_distance_matrix(lat[i0:i1], lon[i0:i1], lat, lon)
-                corr = model.spatial_corr(dist)
-                corr[np.arange(i1 - i0), np.arange(i0, i1)] = 1.0
-                quad += np.sum(support[i0:i1, :] * (corr @ support), axis=0)
-        else:
-            sample_n = min(SPATIAL_SUBSAMPLE_MAX_GLACIERS, n)
-            sample_ids = rng.choice(n, size=sample_n, replace=False)
-            s_support = support[sample_ids, :]
-            s_lat = lat[sample_ids]
-            s_lon = lon[sample_ids]
-            offdiag_sample = np.zeros(support.shape[1], dtype=float)
-            for i0 in range(0, sample_n, SPATIAL_BLOCK_SIZE):
-                i1 = min(i0 + SPATIAL_BLOCK_SIZE, sample_n)
-                dist = haversine_distance_matrix(s_lat[i0:i1], s_lon[i0:i1], s_lat, s_lon)
-                corr = model.spatial_corr(dist)
-                corr[np.arange(i1 - i0), np.arange(i0, i1)] = 0.0
-                offdiag_sample += np.sum(s_support[i0:i1, :] * (corr @ s_support), axis=0)
-            scale = (n * (n - 1)) / max(sample_n * (sample_n - 1), 1)
-            quad = diag + offdiag_sample * scale
-        for (start, end), var in zip(period_defs, quad):
-            out[(str(group), int(start), int(end))] = float(np.sqrt(max(var, 0.0)))
-    return out
-
-
-def summarize_region_periods(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
-    """Aggregate glacier conversions to regional periods."""
-    new_spatial = spatial_sigma(periods, model, "sigma_dM_rho_surrogate_kg")
-    rows = []
-    for key, g in periods.groupby(["region_group", "region_label", "start_year", "end_year", "period_years"], sort=True):
-        group, label, start, end, dt = key
-        dV = float(g["dV_m3"].sum())
-        old_mass = float(g["dM_old_kg"].sum())
-        new_mass = float(g["dM_surrogate_kg"].sum())
-        old_vol_sigma = float(np.sqrt(np.nansum(g["sigma_dM_volume_old_kg"].to_numpy(float) ** 2)))
-        new_vol_sigma = float(np.sqrt(np.nansum(g["sigma_dM_volume_surrogate_kg"].to_numpy(float) ** 2)))
-        old_rho_sigma = OLD_SIGMA_RHO * abs(dV)
-        new_rho_sigma = new_spatial[(str(group), int(start), int(end))]
-        rows.append(
-            {
-                "region_group": group,
-                "region_label": label,
-                "start_year": int(start),
-                "end_year": int(end),
-                "period_years": int(dt),
-                "n_glaciers": int(g["rgiid"].nunique()),
-                "area_m2": float(g.drop_duplicates("rgiid")["area"].sum()),
-                "dV_m3": dV,
-                "old_rho_mean_kg_m3": OLD_RHO,
-                "surrogate_rho_mean_kg_m3": new_mass / dV if dV != 0 else np.nan,
-                "old_mass_gt": old_mass / 1.0e12,
-                "surrogate_mass_gt": new_mass / 1.0e12,
-                "old_mass_rate_gt_yr": old_mass / dt / 1.0e12,
-                "surrogate_mass_rate_gt_yr": new_mass / dt / 1.0e12,
-                "mass_rate_difference_gt_yr": (new_mass - old_mass) / dt / 1.0e12,
-                "old_sigma_mass_gt": np.sqrt(old_vol_sigma**2 + old_rho_sigma**2) / 1.0e12,
-                "surrogate_sigma_mass_gt": np.sqrt(new_vol_sigma**2 + new_rho_sigma**2) / 1.0e12,
-                "old_sigma_rho_equiv_kg_m3": np.sqrt(old_vol_sigma**2 + old_rho_sigma**2) / abs(dV) if dV != 0 else np.nan,
-                "surrogate_sigma_rho_equiv_kg_m3": np.sqrt(new_vol_sigma**2 + new_rho_sigma**2) / abs(dV) if dV != 0 else np.nan,
-                "old_density_only_sigma_gt": old_rho_sigma / 1.0e12,
-                "surrogate_density_only_sigma_gt": new_rho_sigma / 1.0e12,
-                "filled_glacier_period_fraction": float(g["filled_from_region_period_mean"].mean()),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def summarize_global(regional: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate regional summaries globally with regions independent."""
-    rows = []
-    for key, g in regional.groupby(["start_year", "end_year", "period_years"], sort=True):
-        start, end, dt = key
-        old_mass = float((g["old_mass_gt"] * 1.0e12).sum())
-        new_mass = float((g["surrogate_mass_gt"] * 1.0e12).sum())
-        dV = float(g["dV_m3"].sum())
-        rows.append(
-            {
-                "start_year": int(start),
-                "end_year": int(end),
-                "period_years": int(dt),
-                "dV_m3": dV,
-                "old_rho_mean_kg_m3": old_mass / dV if dV != 0 else np.nan,
-                "surrogate_rho_mean_kg_m3": new_mass / dV if dV != 0 else np.nan,
-                "old_mass_gt": old_mass / 1.0e12,
-                "surrogate_mass_gt": new_mass / 1.0e12,
-                "old_mass_rate_gt_yr": old_mass / dt / 1.0e12,
-                "surrogate_mass_rate_gt_yr": new_mass / dt / 1.0e12,
-                "mass_rate_difference_gt_yr": (new_mass - old_mass) / dt / 1.0e12,
-                "old_sigma_mass_gt": float(np.sqrt(np.nansum(g["old_sigma_mass_gt"].to_numpy(float) ** 2))),
-                "surrogate_sigma_mass_gt": float(np.sqrt(np.nansum(g["surrogate_sigma_mass_gt"].to_numpy(float) ** 2))),
-                "old_density_only_sigma_gt": float(np.sqrt(np.nansum(g["old_density_only_sigma_gt"].to_numpy(float) ** 2))),
-                "surrogate_density_only_sigma_gt": float(np.sqrt(np.nansum(g["surrogate_density_only_sigma_gt"].to_numpy(float) ** 2))),
-                "old_sigma_rho_equiv_kg_m3": float(np.sqrt(np.nansum((g["old_sigma_mass_gt"].to_numpy(float) * 1.0e12) ** 2))) / abs(dV) if dV != 0 else np.nan,
-                "surrogate_sigma_rho_equiv_kg_m3": float(np.sqrt(np.nansum((g["surrogate_sigma_mass_gt"].to_numpy(float) * 1.0e12) ** 2))) / abs(dV) if dV != 0 else np.nan,
-                "old_density_only_sigma_rho_equiv_kg_m3": float(np.sqrt(np.nansum((g["old_density_only_sigma_gt"].to_numpy(float) * 1.0e12) ** 2))) / abs(dV) if dV != 0 else np.nan,
-                "surrogate_density_only_sigma_rho_equiv_kg_m3": float(np.sqrt(np.nansum((g["surrogate_density_only_sigma_gt"].to_numpy(float) * 1.0e12) ** 2))) / abs(dV) if dV != 0 else np.nan,
-            }
-        )
-    out = pd.DataFrame(rows)
-    for method in ["old", "surrogate"]:
-        first = out.loc[(out["start_year"].eq(2000)) & (out["end_year"].eq(2010)), f"{method}_mass_rate_gt_yr"]
-        second = out.loc[(out["start_year"].eq(2010)) & (out["end_year"].eq(2020)), f"{method}_mass_rate_gt_yr"]
-        if len(first) and len(second):
-            out[f"{method}_mass_rate_change_2010_2020_minus_2000_2010_gt_yr"] = float(second.iloc[0] - first.iloc[0])
-            out[f"{method}_loss_acceleration_gt_yr"] = float(-(second.iloc[0] - first.iloc[0]))
-    return out
-
-
 def summarize_glacier_changes(periods: pd.DataFrame) -> pd.DataFrame:
     """Summarize average glacier-scale changes from 850+/-60 to the surrogate."""
     rows = []
@@ -504,6 +356,15 @@ def summarize_glacier_changes(periods: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
+    """
+    Write glacier, regional and global comparisons with the previous conversion.
+
+    apply_conversions() calculates glacier mass changes and surrogate residual errors.
+    spatially_correlated_sigma_by_group_period() propagates those residual errors,
+    while spatial_volume_sigma() propagates the Hugonnet measurement components.
+    summarize_region_period_conversions() combines the two uncertainty contributions
+    once, then summarize_global_period_conversions() combines independent regions.
+    """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     model = RhoSurrogate()
     periods = read_or_build_elevation_changes(model, rebuild_cache=REBUILD_CACHE)

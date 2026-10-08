@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""Estimate agreement variance attributable to firn-parametrization variants.
+"""
+Estimate variance that we can attribute to firn parametrization sensitivity tests.
 
-This diagnostic refits the retained mean/sigma surrogate separately for the
-three full-model firn-density variants, then evaluates agreement for:
-
-* the pooled final surrogate fitted to all variants at once;
-* a separate surrogate fitted only to the evaluation variant.
-
-The primary output reports how much of the pooled unexplained agreement
-variance is removed by fitting each firn-parametrization variant separately.
-Positive percentages therefore indicate the share of pooled unexplained
-variance attributable to pooling iteration9, sensmin and sensmax.
+This script refits the retained mean/sigma surrogate separately for the three firn density variants,
+then evaluates agreement between the final surrogate fitted to all variants at once, or a separate surrogate
+fitted only to a given variant.
 """
 
 from __future__ import annotations
@@ -199,7 +193,7 @@ def fit_one_variant(
     variant: str,
     memory_config: dict[str, float | str | None],
 ) -> dict[str, object]:
-    """Fit retained mean and sigma forms to one firn-density variant."""
+    """Fit retained mean and sigma forms to one firn density variant."""
     variant_dir = FIT_DIR / variant
     configure_fit_module_for_diagnostic(fitmod, variant, variant_dir)
 
@@ -297,7 +291,7 @@ def run_agreement_case(
     model_source: str,
     evaluation_variant: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate one parameter file against one full-model variant."""
+    """Evaluate one parameter file against one full model variant."""
     print(f"[agreement] {model_source} on {evaluation_variant}", flush=True)
     model = RhoSurrogate.from_files(
         parameter_path,
@@ -362,7 +356,7 @@ def summarize_regional_detail(agreement, detail: pd.DataFrame) -> pd.DataFrame:
 
 
 def summarize_glacier_detail(agreement, detail: pd.DataFrame) -> pd.DataFrame:
-    """Summarize glacier-period agreement when glacier detail is enabled."""
+    """Summarize glacier and period agreement when glacier detail is enabled."""
     if detail.empty:
         return pd.DataFrame()
     by_variant = agreement.summarize_grouped_agreement(

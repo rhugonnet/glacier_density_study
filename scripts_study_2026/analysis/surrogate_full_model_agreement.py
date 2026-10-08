@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regional agreement between the full model and the final surrogate."""
+"""Compute per-glacier and regional agreement between the full model and the surrogate model."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def first_existing(columns: pd.Index, candidates: list[str], required: bool = Tr
 
 
 def read_full_model_input(path: Path, variants: list[str] | None = None) -> pd.DataFrame:
-    """Read the full-model effective-density calibration sample."""
+    """Read the full model effective density calibration sample."""
     header = pd.read_csv(path, nrows=0).columns
     rgi_col = first_existing(header, ["rgiid", "RGIId", "RGIId_float"])
     rho_col = first_existing(header, ["rho"])
@@ -215,7 +215,7 @@ def summarize_grouped_agreement(
 
 
 def add_past_change(periods: pd.DataFrame, annual_source: pd.DataFrame, model: RhoSurrogate, start_year: float, end_year: float) -> pd.DataFrame:
-    """Attach exponentially weighted past elevation change to each period."""
+    """Attach exponentially weighted past elevation change rate to each period."""
     annual = annual_source.loc[
         np.isclose(annual_source["period_years"].to_numpy(float), 1.0),
         ["rgiid", "start_date", "signed_dh"],
@@ -223,8 +223,8 @@ def add_past_change(periods: pd.DataFrame, annual_source: pd.DataFrame, model: R
     annual = annual.sort_values(["rgiid", "start_date"]).drop_duplicates(["rgiid", "start_date"], keep="first")
     annual_wide = annual.pivot(index="rgiid", columns="start_date", values="signed_dh")
 
-    tau_years = float(model.params.get("T_p", 5.0))
-    tau_max = int(round(float(model.params.get("tau_max", 20.0))))
+    tau_years = float(model.params["memory_tau_years"])
+    tau_max = int(round(float(model.params["tau_max"])))
     past_parts = []
     for start in np.arange(int(start_year), int(end_year)):
         available_lags = [lag for lag in range(1, tau_max + 1) if (start - lag) in annual_wide.columns]
@@ -254,7 +254,7 @@ def add_past_change(periods: pd.DataFrame, annual_source: pd.DataFrame, model: R
 
 
 def prepare_periods(df: pd.DataFrame, model: RhoSurrogate, start_year: float, end_year: float, variant: str) -> pd.DataFrame:
-    """Prepare glacier-period full-model and independent surrogate estimates."""
+    """Prepare full model and independent surrogate estimates for each glacier and period."""
     d = df.loc[df[VARIANT_COL].astype(str).eq(variant)].copy()
     if "rgi_region" not in d.columns:
         d["rgi_region"] = pd.to_numeric(d["rgiid"].astype(str).str.extract(r"RGI60-(\d+)")[0], errors="coerce")
@@ -298,7 +298,7 @@ def prepare_periods(df: pd.DataFrame, model: RhoSurrogate, start_year: float, en
 
 
 def add_temporal_closure(periods: pd.DataFrame, model: RhoSurrogate, start_year: float, end_year: float) -> pd.DataFrame:
-    """Add temporally closed surrogate mass and uncertainty to glacier-period rows."""
+    """Add reconciled mass change and uncertainty to each glacier and observation period."""
     period_table = (
         periods[["start_date", "end_date", "i0", "i1", "period_years"]]
         .drop_duplicates()
@@ -383,7 +383,7 @@ def spatial_sigma_by_period(region: pd.DataFrame, model: RhoSurrogate, sigma_col
 
 
 def aggregate_region_period(periods: pd.DataFrame, mode: str, model: RhoSurrogate) -> pd.DataFrame:
-    """Aggregate glacier-period estimates by RGI region and period."""
+    """Combine glacier estimates for each RGI region and observation period."""
     if mode == "independent":
         dM_col = "dM_ind_kg"
         sigma_col = "sigma_dM_ind_kg"

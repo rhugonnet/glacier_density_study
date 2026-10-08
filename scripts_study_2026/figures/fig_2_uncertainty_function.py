@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main figure 2: effective-density uncertainty function."""
+"""Main figure 2: effective density uncertainty function."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def set_decimal_log_ticks(ax, axis: str = "both") -> None:
 
 
 def plot_uncertainty(axis_mode: str, out_path: Path) -> None:
-    """Plot and save the uncertainty-function figure
+    """Plot and save the uncertainty function figure
 
     :param axis_mode: Either ``linear`` or ``log``
     :param out_path: Output PNG path

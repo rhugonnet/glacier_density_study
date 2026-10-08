@@ -1,0 +1,16 @@
+{
+  "area_m2": 1000000.0,
+  "dM_kg": -829128788.8821254,
+  "dV_m3": -1000000.0,
+  "dh_m": -1.0,
+  "mu_rho_kg_m3": 829.1287888821254,
+  "past_dh_m": -0.2,
+  "period_years": 5.0,
+  "sigma_dM_dh_kg": 160786414.71754515,
+  "sigma_dM_rho_kg": 265106464.10357043,
+  "sigma_dM_total_kg": 310054363.7287179,
+  "sigma_dV_m3": 200000.0,
+  "sigma_dh_m": 0.2,
+  "sigma_past_dh_m": 0.08,
+  "sigma_rho_kg_m3": 265.10646410357043
+}

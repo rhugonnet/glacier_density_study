@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run the final 2026 analysis and figure pipeline.
+"""
+Run the final 2026 analysis and figure pipeline.
 
-This script intentionally keeps the final run reproducible from Python only:
-all script choices are encoded here and in the individual scripts, with no
-command-line arguments required.
+The objective of this script is to keep the final full study run reproducible from Python only.
+All choices/order of scripts is encoded below.
 """
 
 from __future__ import annotations

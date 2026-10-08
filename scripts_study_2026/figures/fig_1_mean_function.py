@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main figure 1: mean effective-density function."""
+"""Main figure 1: mean effective density function."""
 
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def plot_signed_curve(ax, x: np.ndarray, y: np.ndarray, color, *, lw: float) -> 
 def signed_asinh_forward(x: np.ndarray) -> np.ndarray:
     """Transform signed values with a smooth near-zero compression
 
-    :param x: Values in elevation-change units
+    :param x: Values in elevation change units
     """
     return np.arcsinh(np.asarray(x, dtype=float) / SIGNED_ASINH_SCALE)
 
@@ -178,7 +178,7 @@ def build_neutral_panel_table(target: pd.DataFrame, model: RhoSurrogate) -> pd.D
 
 
 def plot_figure(axis_mode: str, out_path: Path) -> None:
-    """Plot and save the mean-function figure
+    """Plot and save the mean function figure
 
     :param axis_mode: Either ``linear`` or ``log``
     :param out_path: Output PNG path
@@ -194,7 +194,7 @@ def plot_figure(axis_mode: str, out_path: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(11.8, 4.55), constrained_layout=True, sharey=True)
     ax_mem, ax_per = axes
 
-    # Plot past-elevation-change dependence at fixed five-year period
+    # Plot past elevation change rate dependence at fixed five-year period
     periods_available = np.sort(target["period_years"].dropna().unique().astype(float))
     period5_value = periods_available[int(np.argmin(np.abs(periods_available - 5.0)))]
     period5 = target.loc[np.isclose(target["period_years"], period5_value)].copy()
@@ -224,7 +224,7 @@ def plot_figure(axis_mode: str, out_path: Path) -> None:
         ax_mem.scatter(sub["current_center_w"], sub["rho_mean_w"], s=28, color=color, alpha=0.70, linewidths=0)
         plot_signed_curve(ax_mem, xgrid, model.mu_rho(xgrid, dh_p=memory_value, dt=5.0), color, lw=2.0)
 
-    # Format past-elevation-change-rate panel
+    # Format past elevation change rate panel
     ax_mem.axhline(RHO_ICE, color="black", lw=1, ls="--")
     ax_mem.axvline(0, color="black", lw=1)
     set_xaxis(ax_mem, axis_mode)
@@ -243,7 +243,7 @@ def plot_figure(axis_mode: str, out_path: Path) -> None:
     ax_mem.add_artist(leg_mem)
     ax_mem.legend(handles=main_style_legend_handles(), frameon=False, loc="lower right")
 
-    # Plot period-length dependence at neutral past elevation-change rate
+    # Plot period length dependence at neutral past elevation change rate
     neutral = build_neutral_panel_table(target, model)
     neutral = neutral.loc[np.abs(neutral["current_center_w"].to_numpy(float)) >= 0.5].copy()
     periods_available = neutral["period_years"].dropna().unique().astype(float)
@@ -256,7 +256,7 @@ def plot_figure(axis_mode: str, out_path: Path) -> None:
         ax_per.scatter(sub["current_center_w"], sub["rho_obs_w"], s=24, color=color, alpha=0.75, edgecolors="none")
         plot_signed_curve(ax_per, xgrid, model.mu_rho(xgrid, dh_p=0.0, dt=float(period)), color, lw=1.8)
 
-    # Format period-length panel
+    # Format period length panel
     ax_per.axhline(RHO_ICE, color="black", lw=1, ls="--")
     ax_per.axvline(0, color="black", lw=1)
     set_xaxis(ax_per, axis_mode)

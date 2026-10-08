@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main figure 0: surrogate-model workflow flowchart."""
+"""Main figure 0: surrogate model workflow flowchart."""
 
 from __future__ import annotations
 
@@ -234,7 +234,7 @@ def draw_predictor_inset(fig):
         s=14, color="black", zorder=3,
     )
 
-    # Highlight past-elevation history with decreasing lookback weight.
+    # Highlight past elevation history with decreasing lookback weight.
     for j in range(i0):
         frac = (j + 1) / i0
         ax.plot(

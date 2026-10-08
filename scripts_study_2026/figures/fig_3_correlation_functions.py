@@ -89,12 +89,7 @@ def as_boolean(series: pd.Series) -> pd.Series:
 def read_temporal_display_parameters(path: Path) -> tuple[float, float]:
     """Read the fitted positive-lag temporal correlation parameters."""
     params = pd.read_csv(path).iloc[0]
-    if "empirical_sill" in params and "empirical_range_yr" in params:
-        return float(params["empirical_sill"]), float(params["empirical_range_yr"])
-    if "empirical_amplitude_after_nugget" in params and "empirical_timescale_yr" in params:
-        return float(params["empirical_amplitude_after_nugget"]), float(params["empirical_timescale_yr"])
-    nugget = float(params.get("empirical_nugget", params.get("nugget", 0.70)))
-    return 1.0 - nugget, float(params.get("empirical_timescale_yr", 3.0))
+    return float(params["empirical_sill"]), float(params["empirical_range_yr"])
 
 
 # Read saved correlation outputs
@@ -117,7 +112,7 @@ model = RhoSurrogate.from_files(
 )
 
 
-# Select period-length bins to display
+# Select period length bins to display
 available_periods = np.sort(
     spatial["period_years"].dropna().astype(float).unique()
 )
@@ -163,7 +158,7 @@ if "used_for_corr" in spatial.columns:
 else:
     used_for_corr = pd.Series(True, index=spatial.index)
 
-# Plot empirical estimates separately for each period-length bin
+# Plot empirical estimates separately for each period length bin
 for period in periods:
     sub = spatial.loc[
         np.isclose(
