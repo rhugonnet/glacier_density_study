@@ -64,8 +64,6 @@ The installation should work on Windows, Linux and macOS with Python 3.10 to 3.1
 If installation fails, it is likely because you have conflicts with your global system Python.
 To solve these, create a separate Python environment before running ```pip install```. 
 
-Replace `yourenvname` below with your chosen environment name.
-
 For example, with [Conda](https://continuumio-docs.readthedocs-hosted.com/miniconda/) installed as a package manager:
 
 ```sh
