@@ -116,8 +116,8 @@ def compute_grid(
             mean[iy, ix] = model.integrated_mu(
                 dh=dh,
                 sigma_dh=float(sigma_dh),
-                dh_p=dh_p,
-                sigma_dh_p=sigma_dh_p,
+                past_dhdt=dh_p,
+                sigma_past_dhdt=sigma_dh_p,
                 dt=dt,
             )
             sigma_rho[iy, ix] = model.integrated_sigma(

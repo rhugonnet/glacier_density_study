@@ -150,8 +150,8 @@ def build_neutral_panel_table(target: pd.DataFrame, model: RhoSurrogate) -> pd.D
     memory = d["memory_center_w"].to_numpy(float)
     period = d["period_years"].to_numpy(float)
     d["rho_mem0"] = d["rho_mean_w"].to_numpy(float) - (
-        model.mu_rho(current, dh_p=memory, dt=period)
-        - model.mu_rho(current, dh_p=0.0, dt=period)
+        model.mu_rho(current, past_dhdt=memory, dt=period)
+        - model.mu_rho(current, past_dhdt=0.0, dt=period)
     )
 
     rows = []
@@ -168,7 +168,7 @@ def build_neutral_panel_table(target: pd.DataFrame, model: RhoSurrogate) -> pd.D
                 "current_bin": int(current_bin),
                 "current_center_w": current_center,
                 "rho_obs_w": weighted_mean(group["rho_mem0"].to_numpy(float), weights),
-                "rho_pred_center": float(model.mu_rho(current_center, dh_p=0.0, dt=period_center)),
+                "rho_pred_center": float(model.mu_rho(current_center, past_dhdt=0.0, dt=period_center)),
                 "weight_sum": float(np.nansum(weights)),
                 "n": int(np.nansum(group["n"].to_numpy(float))) if "n" in group.columns else len(group),
                 "n_eff": float(np.nansum(group["n_eff"].to_numpy(float))) if "n_eff" in group.columns else np.nan,
@@ -222,7 +222,7 @@ def plot_figure(axis_mode: str, out_path: Path) -> None:
         sub = period5.loc[period5["memory_bin"].astype(int) == memory_bin].copy()
         sub = sub.loc[np.abs(sub["current_center_w"].to_numpy(float)) >= 0.2].sort_values("current_center_w")
         ax_mem.scatter(sub["current_center_w"], sub["rho_mean_w"], s=28, color=color, alpha=0.70, linewidths=0)
-        plot_signed_curve(ax_mem, xgrid, model.mu_rho(xgrid, dh_p=memory_value, dt=5.0), color, lw=2.0)
+        plot_signed_curve(ax_mem, xgrid, model.mu_rho(xgrid, past_dhdt=memory_value, dt=5.0), color, lw=2.0)
 
     # Format past elevation change rate panel
     ax_mem.axhline(RHO_ICE, color="black", lw=1, ls="--")
@@ -254,7 +254,7 @@ def plot_figure(axis_mode: str, out_path: Path) -> None:
         color = cmap_per(norm_per(period))
         sub = neutral.loc[np.isclose(neutral["period_years"], period)].sort_values("current_center_w")
         ax_per.scatter(sub["current_center_w"], sub["rho_obs_w"], s=24, color=color, alpha=0.75, edgecolors="none")
-        plot_signed_curve(ax_per, xgrid, model.mu_rho(xgrid, dh_p=0.0, dt=float(period)), color, lw=1.8)
+        plot_signed_curve(ax_per, xgrid, model.mu_rho(xgrid, past_dhdt=0.0, dt=float(period)), color, lw=1.8)
 
     # Format period length panel
     ax_per.axhline(RHO_ICE, color="black", lw=1, ls="--")

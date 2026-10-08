@@ -274,7 +274,7 @@ def prepare_periods(df: pd.DataFrame, model: RhoSurrogate, start_year: float, en
     periods = add_past_change(periods, d, model, start_year, end_year)
     periods["mu_rho_ind_kg_m3"] = model.mu_rho(
         periods["signed_dh"].to_numpy(float),
-        dh_p=periods["past_dh"].to_numpy(float),
+        past_dhdt=periods["past_dh"].to_numpy(float),
         dt=periods["period_years"].to_numpy(float),
     )
     periods["sigma_rho_ind_kg_m3"] = model.sigma_rho(

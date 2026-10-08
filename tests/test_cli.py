@@ -23,7 +23,7 @@ def test_main__single_period_json(capsys) -> None:
 
     # Check the assumed past elevation change rate and derived mass change
     assert status == 0
-    assert result["past_dh_m"] == -0.2
+    assert result["past_dhdt_m_yr"] == -0.2
     assert result["dV_m3"] == -1_000_000
     assert np.isfinite(result["mu_rho_kg_m3"])
     assert result["dM_kg"] == result["mu_rho_kg_m3"] * result["dV_m3"]
@@ -31,6 +31,26 @@ def test_main__single_period_json(capsys) -> None:
     assert result["sigma_dM_dh_kg"] > 0
     assert result["sigma_dM_total_kg"] > result["sigma_dM_rho_kg"]
     assert result["sigma_dV_m3"] == 200_000
+
+
+def test_main__supplied_past_rate(capsys) -> None:
+    """Checks that supplied past elevation change rates and uncertainties appear in JSON in m yr-1."""
+
+    # Supplied rates differ from the current rate and its default uncertainty
+    arguments = [
+        "--dh", "-10", "--sigma-dh", "1", "--dt", "20", "--area-m2", "1000000",
+        "--past-dhdt", "-0.3", "--sigma-past-dhdt", "0.07",
+    ]
+    expected = RhoSurrogate().predict(
+        dh=-10.0, sigma_dh=1.0, dt=20.0, area_m2=1e6, past_dhdt=-0.3, sigma_past_dhdt=0.07,
+    )
+
+    # The CLI must pass both rates to the API without dividing them by the period length
+    assert main(arguments) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["past_dhdt_m_yr"] == -0.3
+    assert result["sigma_past_dhdt_m_yr"] == 0.07
+    assert result == expected
 
 
 def test_module__single_period_json() -> None:
@@ -99,6 +119,36 @@ def test_main__csv_reconciles_contiguous_periods(tmp_path, capsys) -> None:
     assert status == 0
     assert len(predictions) == 3
     np.testing.assert_allclose(combined_mass, annual_mass, rtol=1e-12)
+    assert str(output_path) in capsys.readouterr().out
+
+
+def test_main__custom_past_rate_columns(tmp_path, capsys) -> None:
+    """Checks that custom CSV past-rate columns produce predictions with the standard output names."""
+
+    # Use one five-year period so annual rates cannot be mistaken for total elevation changes
+    observations = pd.DataFrame({
+        "start_year": [2000], "end_year": [2005], "dh_m": [-10.0], "sigma_dh_m": [0.5],
+        "area_m2": [1e6], "history": [-0.3], "history_error": [0.07],
+    })
+    input_path = tmp_path / "observations.csv"
+    output_path = tmp_path / "predictions.csv"
+    observations.to_csv(input_path, index=False)
+
+    # Select the custom columns through the renamed CLI options
+    arguments = [
+        str(input_path), str(output_path), "--past-dhdt-col", "history",
+        "--sigma-past-dhdt-col", "history_error",
+    ]
+    assert main(arguments) == 0
+    result = pd.read_csv(output_path)
+    expected = RhoSurrogate().predict_timeseries(
+        observations, past_dhdt_col="history", sigma_past_dhdt_col="history_error",
+    )
+
+    # Both selected rates and all predictions must agree with the Python interface
+    assert result["past_dhdt_m_yr"].iloc[0] == -0.3
+    assert result["sigma_past_dhdt_m_yr"].iloc[0] == 0.07
+    pd.testing.assert_frame_equal(result, expected, check_dtype=False)
     assert str(output_path) in capsys.readouterr().out
 
 

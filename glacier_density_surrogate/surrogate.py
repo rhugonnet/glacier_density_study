@@ -467,7 +467,7 @@ class RhoSurrogate:
         x = mean + math.sqrt(2.0) * sigma * gh_x
         return float(np.sum(gh_w * np.asarray(func(x), dtype=float)) / math.sqrt(math.pi))
 
-    def mu_rho(self, dh: np.ndarray | float, dh_p: np.ndarray | float = 0.0, dt: float = 1.0) -> np.ndarray:
+    def mu_rho(self, dh: np.ndarray | float, past_dhdt: np.ndarray | float = 0.0, dt: float = 1.0) -> np.ndarray:
         """
         Surrogate mean function for effective density when the elevation changes are exact.
 
@@ -477,7 +477,7 @@ class RhoSurrogate:
         of mass change to volume change is poorly defined.
 
         :param dh: Current elevation change over the observation period, in metres.
-        :param dh_p: Past elevation change rate in m yr-1.
+        :param past_dhdt: Past elevation change rate in m yr-1.
         :param dt: Observation period length in years (may also be an array).
 
         :returns: Mean effective density in kg m-3, with the broadcast input shape.
@@ -485,7 +485,7 @@ class RhoSurrogate:
 
         params = self.params
         dh_arr = finite_array(dh, "dh")
-        dh_p_arr = finite_array(dh_p, "dh_p")
+        past_dhdt_arr = finite_array(past_dhdt, "past_dhdt")
         dt_arr = finite_array(dt, "dt", positive=True)
 
         # Approach ice density as elevation change grows and firn changes matter less
@@ -494,10 +494,10 @@ class RhoSurrogate:
         damping = np.exp(-np.clip((abs_dh / float(params["H"])) ** float(params["beta"]), 0.0, 700.0))
 
         # Combine a finite memory term with a term that diverges near zero volume change
-        finite_past = float(params["Bmem"]) * sign_dh * _signed_abs_power(dh_p_arr, float(params["etaMem"]))
+        finite_past = float(params["Bmem"]) * sign_dh * _signed_abs_power(past_dhdt_arr, float(params["etaMem"]))
         singular_past = (
             float(params["A"])
-            * np.tanh(sign_dh * dh_p_arr / float(params["LA"]))
+            * np.tanh(sign_dh * past_dhdt_arr / float(params["LA"]))
             / (abs_dh ** float(params["alpha"]))
         )
         density_correction = float(params["Bc"]) + _period_component(params, dt_arr) + finite_past + singular_past
@@ -524,18 +524,18 @@ class RhoSurrogate:
         sigma = np.sqrt(float(params["A0"]) ** 2 / abs_dh + float(params["A1"]) ** 2 * dt_arr / abs_dh**2)
         return np.maximum(sigma, float(params.get("sigma_numeric_floor", 1.0)))
 
-    def _past_moments(self, dh_p: float, sigma_dh_p: float) -> tuple[float, float]:
+    def _past_moments(self, past_dhdt: float, sigma_past_dhdt: float) -> tuple[float, float]:
         """Average the signed power and tanh terms over uncertain past elevation change rate."""
         signed_power = self.integrate_normal(
             lambda y: _signed_abs_power(y, float(self.params["etaMem"])),
-            dh_p,
-            sigma_dh_p,
+            past_dhdt,
+            sigma_past_dhdt,
             use_past_nodes=True,
         )
         tanh_moment = self.integrate_normal(
             lambda y: np.tanh(y / float(self.params["LA"])),
-            dh_p,
-            sigma_dh_p,
+            past_dhdt,
+            sigma_past_dhdt,
             use_past_nodes=True,
         )
         return signed_power, tanh_moment
@@ -543,8 +543,8 @@ class RhoSurrogate:
     def _mean_integrated_over_past(
         self,
         dh: np.ndarray | float,
-        dh_p: float,
-        sigma_dh_p: float,
+        past_dhdt: float,
+        sigma_past_dhdt: float,
         dt: float,
     ) -> np.ndarray:
         """
@@ -553,8 +553,8 @@ class RhoSurrogate:
         The current elevation changes remain fixed. This function is mostly used as an internal helper.
 
         :param dh: Current elevation changes in metres.
-        :param dh_p: Past elevation change rate in m yr-1.
-        :param sigma_dh_p: Standard deviation of the past elevation change rate in m yr-1.
+        :param past_dhdt: Past elevation change rate in m yr-1.
+        :param sigma_past_dhdt: Standard deviation of the past elevation change rate in m yr-1.
         :param dt: Observation period length in years.
 
         :returns: Mean density in kg m-3, with the same shape as dh.
@@ -568,7 +568,7 @@ class RhoSurrogate:
         damping = np.exp(-np.clip((abs_dh / float(params["H"])) ** float(params["beta"]), 0.0, 700.0))
 
         # Average the past elevation change rate terms once for all current integration points
-        signed_power, tanh_moment = self._past_moments(dh_p, sigma_dh_p)
+        signed_power, tanh_moment = self._past_moments(past_dhdt, sigma_past_dhdt)
         finite_past = float(params["Bmem"]) * sign_dh * signed_power
         singular_past = float(params["A"]) * sign_dh * tanh_moment / (abs_dh ** float(params["alpha"]))
         density_correction = float(params["Bc"]) + _period_component(params, float(dt)) + finite_past + singular_past
@@ -578,8 +578,8 @@ class RhoSurrogate:
         self,
         dh: float,
         sigma_dh: float = 0.0,
-        dh_p: float = 0.0,
-        sigma_dh_p: float = 0.0,
+        past_dhdt: float = 0.0,
+        sigma_past_dhdt: float = 0.0,
         dt: float = 1.0,
     ) -> float:
         """
@@ -594,24 +594,24 @@ class RhoSurrogate:
 
         :param dh: Measured current elevation change over the period, in metres.
         :param sigma_dh: Standard deviation of current elevation change in metres.
-        :param dh_p: Past elevation change rate in m yr-1.
-        :param sigma_dh_p: Standard deviation of the past elevation change rate in m yr-1.
+        :param past_dhdt: Past elevation change rate in m yr-1.
+        :param sigma_past_dhdt: Standard deviation of the past elevation change rate in m yr-1.
         :param dt: Observation period length in years.
 
         :returns: Mean effective density in kg m-3, or NaN when dh is zero.
         """
 
-        numerator = self._integrated_mass_per_area(dh, sigma_dh, dh_p, sigma_dh_p, dt)
+        numerator = self._integrated_mass_per_area(dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt)
         return numerator / dh if dh != 0 else np.nan
 
-    def _integrated_mass_per_area(self, dh, sigma_dh, dh_p, sigma_dh_p, dt) -> float:
+    def _integrated_mass_per_area(self, dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt) -> float:
         """Average density times change without dividing by observed volume change."""
         finite_array(dh, "dh")
         finite_array(dt, "dt", positive=True)
 
         # Average density times elevation change over current uncertainty
         numerator = self.integrate_normal(
-            lambda x: self._mean_integrated_over_past(x, dh_p, sigma_dh_p, dt) * x,
+            lambda x: self._mean_integrated_over_past(x, past_dhdt, sigma_past_dhdt, dt) * x,
             dh,
             sigma_dh,
         )
@@ -666,8 +666,8 @@ class RhoSurrogate:
         sigma_dh: float = 0.0,
         *,
         dt: float,
-        past_dh: float | None = None,
-        sigma_past_dh: float | None = None,
+        past_dhdt: float | None = None,
+        sigma_past_dhdt: float | None = None,
         area_m2: float | None = None,
         past_missing: Literal["current", "zero"] = "current",
         past_error_factor: float = 2.0,
@@ -682,10 +682,10 @@ class RhoSurrogate:
         :param dh: Mean elevation change over the glacier and observation period, in metres.
         :param sigma_dh: One-sigma uncertainty of dh in metres.
         :param dt: Required period length in years.
-        :param past_dh: Past elevation change rate in m yr-1.
-        :param sigma_past_dh: One-sigma uncertainty of past elevation change rate in m yr-1.
+        :param past_dhdt: Past elevation change rate in m yr-1.
+        :param sigma_past_dhdt: One-sigma uncertainty of past elevation change rate in m yr-1.
         :param area_m2: Optional glacier area in square metres for volume change and mass change outputs.
-        :param past_missing: Assumption for missing past_dh: "current" or "zero".
+        :param past_missing: Assumption for missing past_dhdt: "current" or "zero".
         :param past_error_factor: Multiplier for the default past elevation change rate uncertainty.
 
         :returns: A dictionary containing the predictors, density in kg m-3 and its uncertainty (1-sigma). With area
@@ -704,20 +704,20 @@ class RhoSurrogate:
             raise ValueError("past_missing must be 'current' or 'zero'")
 
         # Supply a past elevation change rate and uncertainty when observations are missing
-        if past_dh is None or np.isnan(past_dh):
+        if past_dhdt is None or np.isnan(past_dhdt):
             if past_missing == "zero":
-                past_dh = 0.0
+                past_dhdt = 0.0
             else:
-                past_dh = dh / dt
-        if sigma_past_dh is None or np.isnan(sigma_past_dh):
-            sigma_past_dh = past_error_factor * sigma_dh / dt
+                past_dhdt = dh / dt
+        if sigma_past_dhdt is None or np.isnan(sigma_past_dhdt):
+            sigma_past_dhdt = past_error_factor * sigma_dh / dt
 
         # Average the model over predictor errors before converting to mass change
         mass_per_area = self._integrated_mass_per_area(
             dh=dh,
             sigma_dh=sigma_dh,
-            dh_p=float(past_dh),
-            sigma_dh_p=float(sigma_past_dh),
+            past_dhdt=float(past_dhdt),
+            sigma_past_dhdt=float(sigma_past_dhdt),
             dt=dt,
         )
         mean_density = mass_per_area / dh if dh != 0 else np.nan
@@ -731,8 +731,8 @@ class RhoSurrogate:
             "dh_m": dh,
             "sigma_dh_m": sigma_dh,
             "period_years": dt,
-            "past_dh_m": float(past_dh),
-            "sigma_past_dh_m": float(sigma_past_dh),
+            "past_dhdt_m_yr": float(past_dhdt),
+            "sigma_past_dhdt_m_yr": float(sigma_past_dhdt),
             "mu_rho_kg_m3": float(mean_density),
             "sigma_rho_kg_m3": float(sigma_density),
         }
@@ -743,7 +743,7 @@ class RhoSurrogate:
 
             volume_change = float(area_m2) * dh
             sigma_input = float(mean_density_volume_sigma_vectorized(
-                self, area_m2, dh, sigma_dh, past_dh, sigma_past_dh, dt,
+                self, area_m2, dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt,
             ))
             out.update(
                 {
@@ -768,8 +768,8 @@ class RhoSurrogate:
         dh_col: str | None = None,
         sigma_dh_col: str | None = None,
         dt_col: str | None = None,
-        past_dh_col: str | None = None,
-        sigma_past_dh_col: str | None = None,
+        past_dhdt_col: str | None = None,
+        sigma_past_dhdt_col: str | None = None,
         area_col: str | None = None,
         area_m2: float | None = None,
         expand_periods: bool = True,
@@ -820,8 +820,8 @@ class RhoSurrogate:
         :param dh_col: Elevation change column in metres.
         :param sigma_dh_col: Elevation change uncertainty column in metres.
         :param dt_col: Period length column in years, used when start/end are absent.
-        :param past_dh_col: Optional past elevation change rate column in m yr-1.
-        :param sigma_past_dh_col: Optional past elevation change rate uncertainty column in m yr-1.
+        :param past_dhdt_col: Optional past elevation change rate column in m yr-1.
+        :param sigma_past_dhdt_col: Optional past elevation change rate uncertainty column in m yr-1.
         :param area_col: Optional glacier area column in square metres.
         :param area_m2: Constant area used when an area column is absent.
         :param expand_periods: Include all contiguous combinations of consecutive
@@ -860,8 +860,8 @@ class RhoSurrogate:
             dh_col=dh_col,
             sigma_dh_col=sigma_dh_col,
             dt_col=dt_col,
-            past_dh_col=past_dh_col,
-            sigma_past_dh_col=sigma_past_dh_col,
+            past_dhdt_col=past_dhdt_col,
+            sigma_past_dhdt_col=sigma_past_dhdt_col,
             area_col=area_col,
             area_m2=area_m2,
             expand_periods=expand_periods,

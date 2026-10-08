@@ -541,7 +541,7 @@ def evaluate_rows(df: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
     out = df.copy()
     out["mu_rho_kg_m3"] = model.mu_rho(
         out["signed_dh"].to_numpy(float),
-        dh_p=out["past_dh"].to_numpy(float),
+        past_dhdt=out["past_dh"].to_numpy(float),
         dt=out["period_years"].to_numpy(float),
     )
     out["sigma_rho_kg_m3"] = model.sigma_rho(out["signed_dh"].to_numpy(float), dt=out["period_years"].to_numpy(float))
@@ -563,8 +563,8 @@ def evaluate_reference_cases(model: RhoSurrogate) -> pd.DataFrame:
                 {
                     "dh_m": dh,
                     "period_years": dt,
-                    "past_dh_m": 0.0,
-                    "mu_rho_kg_m3": model.mu_rho(dh, dh_p=0.0, dt=dt).item(),
+                    "past_dhdt_m_yr": 0.0,
+                    "mu_rho_kg_m3": model.mu_rho(dh, past_dhdt=0.0, dt=dt).item(),
                     "sigma_rho_kg_m3": model.sigma_rho(dh, dt=dt).item(),
                 }
             )
@@ -846,12 +846,12 @@ def final_implications_reference_values(model: RhoSurrogate) -> dict[str, float]
 
     out: dict[str, float] = {}
     for dt in [5.0, 10.0, 20.0]:
-        f = lambda x: float(model.mu_rho(-x, dh_p=0.0, dt=dt)) - 850.0
+        f = lambda x: float(model.mu_rho(-x, past_dhdt=0.0, dt=dt)) - 850.0
         out[f"neutral_abs_dh_at_850_dt{dt:g}"] = float(brentq(f, 0.01, 200.0))
-    out["sustained_thinning_mu_dh_minus10_dhp_minus0p5_dt20"] = float(model.mu_rho(-10.0, dh_p=-0.5, dt=20.0))
-    out["sustained_thinning_mu_dh_minus50_dhp_minus0p5_dt20"] = float(model.mu_rho(-50.0, dh_p=-0.5, dt=20.0))
-    out["short_term_mu_dh_minus2_dhp_minus0p5_dt1"] = float(model.mu_rho(-2.0, dh_p=-0.5, dt=1.0))
-    out["short_term_mu_dh_plus2_dhp_minus0p5_dt1"] = float(model.mu_rho(2.0, dh_p=-0.5, dt=1.0))
+    out["sustained_thinning_mu_dh_minus10_dhp_minus0p5_dt20"] = float(model.mu_rho(-10.0, past_dhdt=-0.5, dt=20.0))
+    out["sustained_thinning_mu_dh_minus50_dhp_minus0p5_dt20"] = float(model.mu_rho(-50.0, past_dhdt=-0.5, dt=20.0))
+    out["short_term_mu_dh_minus2_dhp_minus0p5_dt1"] = float(model.mu_rho(-2.0, past_dhdt=-0.5, dt=1.0))
+    out["short_term_mu_dh_plus2_dhp_minus0p5_dt1"] = float(model.mu_rho(2.0, past_dhdt=-0.5, dt=1.0))
     return out
 
 
@@ -1080,14 +1080,14 @@ def build_manuscript_catalog(
 
     # Record abstract examples for a twenty-year period and neutral past elevation change rate
     for abs_dh in [2, 20]:
-        mu = model.mu_rho(float(abs_dh), dh_p=0.0, dt=20.0).item()
+        mu = model.mu_rho(float(abs_dh), past_dhdt=0.0, dt=20.0).item()
         sigma = model.sigma_rho(float(abs_dh), dt=20.0).item()
         add_value(rows, f"abstract_mu_rho_dt20_abs_dh_{abs_dh:g}m", mu, f"{mu:.0f}", "kg m-3", "surrogate_model", "Abstract example over twenty years with zero past elevation change rate")
         add_value(rows, f"abstract_sigma_rho_dt20_abs_dh_{abs_dh:g}m", sigma, f"{sigma:.0f}", "kg m-3", "surrogate_model", "Abstract example over twenty years with zero past elevation change rate")
 
     # Record integrated examples mentioned in the final surrogate Results section
     for sigma_dh in [0.1, 3.0]:
-        mu = model.integrated_mu(dh=0.5, sigma_dh=sigma_dh, dh_p=0.0, sigma_dh_p=0.0, dt=1.0)
+        mu = model.integrated_mu(dh=0.5, sigma_dh=sigma_dh, past_dhdt=0.0, sigma_past_dhdt=0.0, dt=1.0)
         sigma = model.integrated_sigma(dh=0.5, sigma_dh=sigma_dh, dt=1.0)
         label = str(sigma_dh).replace(".", "p")
         add_value(

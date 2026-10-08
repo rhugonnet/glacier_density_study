@@ -175,7 +175,7 @@ class TestDensityPredictions:
     def test_mean_converges_toward_ice_density_for_large_elevation_change(self) -> None:
         """Checks that very large gains and losses both approach ice density."""
         model = RhoSurrogate()
-        rho = model.mu_rho(np.array([-10000.0, 10000.0]), dh_p=0.0, dt=20.0)
+        rho = model.mu_rho(np.array([-10000.0, 10000.0]), past_dhdt=0.0, dt=20.0)
 
         np.testing.assert_allclose(rho, model.rho_ice, atol=1.0e-3)
 
@@ -205,7 +205,7 @@ class TestDensityPredictions:
         expected = params["rho_ice_fixed"] + damping * (params["Bc"] + period)
 
         # The public prediction must agree for short and long periods
-        np.testing.assert_allclose(model.mu_rho(dh, dh_p=0.0, dt=dt), expected)
+        np.testing.assert_allclose(model.mu_rho(dh, past_dhdt=0.0, dt=dt), expected)
 
     def test_sigma_follows_final_variance_additive_form(self) -> None:
         """Checks that density uncertainty grows for smaller changes and longer periods."""
@@ -232,8 +232,8 @@ class TestDensityPredictions:
         model = RhoSurrogate()
         out = model.predict(dh=-10.0, sigma_dh=1.0, dt=20.0, past_missing="current", past_error_factor=2.0)
 
-        assert out["past_dh_m"] == -0.5
-        assert out["sigma_past_dh_m"] == 0.1
+        assert out["past_dhdt_m_yr"] == -0.5
+        assert out["sigma_past_dhdt_m_yr"] == 0.1
 
 
 class TestIntegratedPredictions:
@@ -379,11 +379,13 @@ class TestMassInputUncertainty:
 
         # With only a linear past rate term, its derivative gives the exact mass change error
         model = RhoSurrogate(params={"period_form": "none", "Bc": 0.0, "Bmem": 2.0, "A": 0.0, "etaMem": 1.0})
-        result = model.predict(dh=-1.0, sigma_dh=0.0, dt=1.0, past_dh=-1.0, sigma_past_dh=0.2, area_m2=1e6)
+        result = model.predict(dh=-1.0, sigma_dh=0.0, dt=1.0, past_dhdt=-1.0, sigma_past_dhdt=0.2, area_m2=1e6)
         damping = np.exp(-(1.0 / model.params["H"]) ** model.params["beta"])
         expected_input = 1e6 * damping * 2.0 * 0.2
 
         assert result["sigma_dV_m3"] == 0.0
+        assert result["past_dhdt_m_yr"] == -1.0
+        assert result["sigma_past_dhdt_m_yr"] == 0.2
         np.testing.assert_allclose(result["sigma_dM_dh_kg"], expected_input, rtol=1e-12)
         assert result["sigma_dM_total_kg"] > result["sigma_dM_rho_kg"]
 
@@ -407,7 +409,7 @@ class TestScalarInputErrors:
         ("dh", np.nan), ("sigma_dh", -0.1), ("sigma_dh", np.inf),
         ("dt", 0.0), ("dt", -1.0), ("dt", np.inf),
         ("area_m2", -1.0), ("area_m2", 0.0),
-        ("past_dh", np.inf), ("sigma_past_dh", -0.1), ("past_error_factor", -1.0),
+        ("past_dhdt", np.inf), ("sigma_past_dhdt", -0.1), ("past_error_factor", -1.0),
     ])
     def test_predict__error_invalid_input(self, argument, value):
         """Checks an error is raised before invalid physical inputs enter predictions."""

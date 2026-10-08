@@ -79,31 +79,54 @@ class TestPeriodPredictions:
         assert "sigma_dM_rho_kg" not in out.columns
 
     @pytest.mark.parametrize("expand", [False, True])
-    def test_predict_timeseries__manual_past(self, observations, expand) -> None:
+    @pytest.mark.parametrize("past_column,sigma_column", [
+        ("past_dhdt_m_yr", "sigma_past_dhdt_m_yr"),
+        ("past_dhdt", "sigma_past_dhdt"),
+        ("past_dh_m", "sigma_past_dh_m"),
+        ("past_dh", "sig_past_dh_m"),
+        ("dh_p_m", "sigma_dh_p_m"),
+        ("dh_p", "sigma_dh_p_m"),
+    ])
+    def test_predict_timeseries__manual_past(self, observations, expand, past_column, sigma_column) -> None:
         """Checks that expansion preserves supplied past elevation change rates and their uncertainties."""
 
-        data = observations.assign(past_dh_m=[-7.0, -8.0], sigma_past_dh_m=[0.3, 0.4])
+        # Explicit rate columns and older aliases must all preserve the supplied values
+        data = observations.assign(**{past_column: [-7.0, -8.0], sigma_column: [0.3, 0.4]})
         predictions = RhoSurrogate().predict_timeseries(data, expand_periods=expand)
 
         # Original observations preserve their predictors; longer periods use history from the same start date
         annual = predictions.loc[predictions.period_years.eq(1)]
-        np.testing.assert_array_equal(annual.past_dh_m, [-7.0, -8.0])
-        np.testing.assert_array_equal(annual.sigma_past_dh_m, [0.3, 0.4])
+        np.testing.assert_array_equal(annual.past_dhdt_m_yr, [-7.0, -8.0])
+        np.testing.assert_array_equal(annual.sigma_past_dhdt_m_yr, [0.3, 0.4])
         if expand:
             full = predictions.loc[predictions.period_years.eq(2)].iloc[0]
-            assert full.past_dh_m == -7.0
-            assert full.sigma_past_dh_m == 0.3
+            assert full.past_dhdt_m_yr == -7.0
+            assert full.sigma_past_dhdt_m_yr == 0.3
+
+    def test_predict_timeseries__past_rate_column_precedence(self, observations) -> None:
+        """Checks that explicit rate columns take precedence over older column names."""
+
+        # Conflicting older values reveal which columns the input reader selects
+        data = observations.assign(
+            past_dhdt_m_yr=[-0.3, -0.4], sigma_past_dhdt_m_yr=[0.1, 0.2],
+            past_dh_m=[-7.0, -8.0], sigma_past_dh_m=[0.3, 0.4],
+        )
+
+        # Output rates must use the columns whose names include m yr-1
+        result = RhoSurrogate().predict_timeseries(data, expand_periods=False)
+        np.testing.assert_array_equal(result["past_dhdt_m_yr"], [-0.3, -0.4])
+        np.testing.assert_array_equal(result["sigma_past_dhdt_m_yr"], [0.1, 0.2])
 
     def test_predict_timeseries__partial_manual_past(self, observations) -> None:
         """Checks that a supplied past elevation change rate or its uncertainty survives filling the other field."""
 
-        data = observations.assign(past_dh_m=[-7.0, np.nan], sigma_past_dh_m=[np.nan, 0.4])
+        data = observations.assign(past_dhdt_m_yr=[-7.0, np.nan], sigma_past_dhdt_m_yr=[np.nan, 0.4])
         result = RhoSurrogate().predict_timeseries(data, expand_periods=False)
 
-        assert result.past_dh_m.iloc[0] == -7.0
-        assert result.sigma_past_dh_m.iloc[0] == 0.2
-        assert result.past_dh_m.iloc[1] == -1.0
-        assert result.sigma_past_dh_m.iloc[1] == 0.4
+        assert result.past_dhdt_m_yr.iloc[0] == -7.0
+        assert result.sigma_past_dhdt_m_yr.iloc[0] == 0.2
+        assert result.past_dhdt_m_yr.iloc[1] == -1.0
+        assert result.sigma_past_dhdt_m_yr.iloc[1] == 0.4
 
     def test_timeseries_past_predictor_uses_annual_rate_for_multiannual_steps(self) -> None:
         """Checks that a five-year observation supplies a past elevation change rate and uncertainty."""
@@ -125,8 +148,8 @@ class TestPeriodPredictions:
         second_elementary = out.loc[(out["start"] == 2005) & (out["end"] == 2010)].iloc[0]
 
         # Divide both the five-year change and its error by five years
-        assert math.isclose(second_elementary["past_dh_m"], -1.0)
-        assert math.isclose(second_elementary["sigma_past_dh_m"], 0.1)
+        assert math.isclose(second_elementary["past_dhdt_m_yr"], -1.0)
+        assert math.isclose(second_elementary["sigma_past_dhdt_m_yr"], 0.1)
 
     def test_timeseries_past_predictor_redistributes_multiannual_steps_before_weighting(self) -> None:
         """Checks that memory weights apply to annual steps sharing each observation's error."""
@@ -156,8 +179,8 @@ class TestPeriodPredictions:
         expected_sigma = math.sqrt(np.sum((block_weights * 0.1) ** 2))
 
         # The filled rate and uncertainty must match the independent calculation
-        assert math.isclose(third_elementary["past_dh_m"], float(np.sum(weights * annual_rates)))
-        assert math.isclose(third_elementary["sigma_past_dh_m"], expected_sigma)
+        assert math.isclose(third_elementary["past_dhdt_m_yr"], float(np.sum(weights * annual_rates)))
+        assert math.isclose(third_elementary["sigma_past_dhdt_m_yr"], expected_sigma)
 
     @pytest.mark.parametrize("changes", [[0.0, -1.0], [1.0, -1.0], [0.0, 0.0]])
     def test_predict_timeseries__zero_change_mass(self, observations, changes) -> None:
@@ -184,7 +207,7 @@ class TestPeriodPredictions:
 
         assert len(result) == 2
         assert not result.temporally_closed.any()
-        np.testing.assert_array_equal(result.past_dh_m, [-0.2, -0.2])
+        np.testing.assert_array_equal(result.past_dhdt_m_yr, [-0.2, -0.2])
 
     def test_predict_timeseries__incomplete_elementary_grid(self, observations) -> None:
         """Checks that overlapping periods are predicted separately when the shorter observations are missing."""
@@ -393,12 +416,12 @@ class TestInputUncertainty:
 
         # With etaMem=1, only the linear past rate term varies when current change is exact
         model = RhoSurrogate(params={"period_form": "none", "Bc": 0.0, "Bmem": 2.0, "A": 0.0, "etaMem": 1.0})
-        data = observations.assign(sigma_dh_m=0.0, past_dh_m=-1.0, sigma_past_dh_m=[0.2, 0.3])
+        data = observations.assign(sigma_dh_m=0.0, past_dhdt_m_yr=-1.0, sigma_past_dhdt_m_yr=[0.2, 0.3])
         result = model.predict_timeseries(data, expand_periods=False)
 
         # The derivative of mass with respect to the past rate gives the exact input error
         damping = np.exp(-(np.abs(result["dh_m"]) / model.params["H"]) ** model.params["beta"])
-        expected = result["area_m2"] * np.abs(result["dh_m"]) * damping * 2.0 * result["sigma_past_dh_m"]
+        expected = result["area_m2"] * np.abs(result["dh_m"]) * damping * 2.0 * result["sigma_past_dhdt_m_yr"]
         np.testing.assert_allclose(result["sigma_dV_m3"], 0.0)
         np.testing.assert_allclose(result["sigma_dM_dh_kg"], expected, rtol=1e-11)
         assert (result["sigma_dM_total_kg"] > result["sigma_dM_rho_kg"]).all()
@@ -456,14 +479,14 @@ class TestInputUncertainty:
         """Checks that custom elevation and history column names produce the same input errors as canonical names."""
 
         model = RhoSurrogate()
-        original = observations.assign(past_dh_m=[-0.3, np.nan], sigma_past_dh_m=[0.2, 0.3])
+        original = observations.assign(past_dhdt_m_yr=[-0.3, np.nan], sigma_past_dhdt_m_yr=[0.2, 0.3])
         renamed = original.rename(columns={
             "start_year": "begin", "end_year": "finish", "dh_m": "change", "sigma_dh_m": "error",
-            "area_m2": "size", "past_dh_m": "history", "sigma_past_dh_m": "history_error",
+            "area_m2": "size", "past_dhdt_m_yr": "history", "sigma_past_dhdt_m_yr": "history_error",
         })
         result = model.predict_timeseries(
             renamed, start_col="begin", end_col="finish", dh_col="change", sigma_dh_col="error",
-            area_col="size", past_dh_col="history", sigma_past_dh_col="history_error",
+            area_col="size", past_dhdt_col="history", sigma_past_dhdt_col="history_error",
         )
 
         pd.testing.assert_frame_equal(result, model.predict_timeseries(original))
@@ -492,7 +515,7 @@ class TestInputUncertainty:
 
         # Exact current changes and a linear past rate term make the input covariance explicit
         model = RhoSurrogate(params={"period_form": "none", "Bc": 0.0, "Bmem": 2.0, "A": 0.0, "etaMem": 1.0, "A0": 3.0, "A1": 4.0})
-        data = observations.assign(sigma_dh_m=0.0, past_dh_m=-1.0, sigma_past_dh_m=0.2)
+        data = observations.assign(sigma_dh_m=0.0, past_dhdt_m_yr=-1.0, sigma_past_dhdt_m_yr=0.2)
         result = model.predict_timeseries(data)
         damping = np.exp(-(np.abs(result["dh_m"]) / model.params["H"]) ** model.params["beta"])
         raw_sigma = result["area_m2"] * np.abs(result["dh_m"]) * damping * 2.0 * 0.2
@@ -558,7 +581,7 @@ class TestBatchIntegration:
         """Checks that broadcasting scalar errors agrees with individual predictions."""
         model = RhoSurrogate()
         dh = np.full(shape, -2.0)
-        expected = model.integrated_mu(-2.0, 0.2, -0.4, 0.1, 5.0)
+        expected = model.integrated_mu(dh=-2.0, sigma_dh=0.2, past_dhdt=-0.4, sigma_past_dhdt=0.1, dt=5.0)
 
         result = integrated_mu_vectorized(model, dh, 0.2, -0.4, 0.1, 5.0)
 
@@ -614,8 +637,8 @@ class TestBatchIntegration:
             area_m2=np.array([1.0e6, 2.0e6]),
             dh=np.array([-4.0, 3.0]),
             sigma_dh=np.array([0.0, 0.0]),
-            past_dh=np.array([-0.5, 0.25]),
-            sigma_past_dh=np.array([0.0, 0.0]),
+            past_dhdt=np.array([-0.5, 0.25]),
+            sigma_past_dhdt=np.array([0.0, 0.0]),
             dt=np.array([5.0, 10.0]),
         )
 
@@ -646,8 +669,8 @@ class TestBatchIntegration:
             area_m2=area,
             dh=dh,
             sigma_dh=sigma_dh,
-            past_dh=np.array([0.0, -1.0]),
-            sigma_past_dh=np.array([0.0, 0.2]),
+            past_dhdt=np.array([0.0, -1.0]),
+            sigma_past_dhdt=np.array([0.0, 0.2]),
             dt=np.array([5.0, 1.0]),
         )
 
@@ -865,7 +888,7 @@ class TestPeriodErrors:
     @pytest.mark.parametrize("column,value", [
         ("dh_m", np.nan), ("sigma_dh_m", -0.1), ("sigma_dh_m", np.inf),
         ("area_m2", 0), ("area_m2", -1), ("start_year", np.inf),
-        ("end_year", 1999), ("sigma_past_dh_m", -0.1),
+        ("end_year", 1999), ("sigma_past_dhdt_m_yr", -0.1),
     ])
     def test_predict_timeseries__error_invalid_observation(self, observations, column, value) -> None:
         """Checks an error is raised for invalid observations rather than silently dropping rows."""

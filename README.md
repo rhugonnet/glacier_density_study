@@ -152,8 +152,8 @@ For a single observation period, the CLI options and Python arguments expect the
 | `--sigma-dh` | `sigma_dh` | Elevation change uncertainty | m |
 | `--dt` | `dt` | Observation period length | yr |
 | `--area-m2` | `area_m2` | Glacier area | m² |
-| `--past-dh` | `past_dh` | Past elevation change rate | m yr⁻¹ |
-| `--sigma-past-dh` | `sigma_past_dh` | Past elevation change rate uncertainty | m yr⁻¹ |
+| `--past-dhdt` | `past_dhdt` | Past elevation change rate | m yr⁻¹ |
+| `--sigma-past-dhdt` | `sigma_past_dhdt` | Past elevation change rate uncertainty | m yr⁻¹ |
 
 Both `dh` and `dt` are required. Elevation change uncertainty defaults to 0 m.
 
@@ -177,8 +177,8 @@ start_year,end_year,dh_m,sigma_dh_m,area_m2
 | `dh_m` | Elevation change over the observation period | m | Required |
 | `sigma_dh_m` | Elevation change uncertainty | m | Optional; defaults to 0 |
 | `area_m2` | Glacier area | m² | Optional |
-| `past_dh_m` | Past elevation change rate | m yr⁻¹ | Optional; estimated when missing |
-| `sigma_past_dh_m` | Past elevation change rate uncertainty | m yr⁻¹ | Optional; estimated when missing |
+| `past_dhdt_m_yr` | Past elevation change rate | m yr⁻¹ | Optional; estimated when missing |
+| `sigma_past_dhdt_m_yr` | Past elevation change rate uncertainty | m yr⁻¹ | Optional; estimated when missing |
 
 Passing **glacier area** triggers estimation of volume/mass change in the output. 
 Without it, the model returns only effective density and its uncertainty.

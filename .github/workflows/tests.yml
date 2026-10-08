@@ -1,0 +1,52 @@
+name: Package tests
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.14"]
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Create a clean environment
+        run: |
+          python -m venv .venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "$GITHUB_WORKSPACE/.venv/Scripts" >> "$GITHUB_PATH"
+          else
+            echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Build and install
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          python -m pip install dist/*.whl pytest
+          python -m pip check
+
+      # Run outside the checkout so local source files cannot hide a broken installation
+      - name: Check installed command
+        working-directory: ${{ runner.temp }}
+        run: |
+          glacier-density-surrogate --dh -1.0 --sigma-dh 0.2 --dt 5 --area-m2 1000000
+          python -m glacier_density_surrogate --dh -1.0 --sigma-dh 0.2 --dt 5 --area-m2 1000000
+
+      - name: Run Pytest against the installed package
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest --import-mode=importlib "${{ github.workspace }}/tests" -ra

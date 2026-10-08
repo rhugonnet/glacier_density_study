@@ -34,8 +34,8 @@ def predict_timeseries(
     dh_col: str | None = None,
     sigma_dh_col: str | None = None,
     dt_col: str | None = None,
-    past_dh_col: str | None = None,
-    sigma_past_dh_col: str | None = None,
+    past_dhdt_col: str | None = None,
+    sigma_past_dhdt_col: str | None = None,
     area_col: str | None = None,
     area_m2: float | None = None,
     expand_periods: bool = True,
@@ -59,8 +59,8 @@ def predict_timeseries(
     # Send the same calculation options to each independent glacier time series
     options = {
         "start_col": start_col, "end_col": end_col, "dh_col": dh_col,
-        "sigma_dh_col": sigma_dh_col, "dt_col": dt_col, "past_dh_col": past_dh_col,
-        "sigma_past_dh_col": sigma_past_dh_col, "area_col": area_col,
+        "sigma_dh_col": sigma_dh_col, "dt_col": dt_col, "past_dhdt_col": past_dhdt_col,
+        "sigma_past_dhdt_col": sigma_past_dhdt_col, "area_col": area_col,
         "area_m2": area_m2, "expand_periods": expand_periods,
         "past_missing": past_missing, "past_error_factor": past_error_factor,
         "dh_error_corr": dh_error_corr, "return_components": return_components,
@@ -100,8 +100,8 @@ def _predict_glacier_timeseries(
     dh_col: str | None = None,
     sigma_dh_col: str | None = None,
     dt_col: str | None = None,
-    past_dh_col: str | None = None,
-    sigma_past_dh_col: str | None = None,
+    past_dhdt_col: str | None = None,
+    sigma_past_dhdt_col: str | None = None,
     area_col: str | None = None,
     area_m2: float | None = None,
     expand_periods: bool = True,
@@ -133,8 +133,8 @@ def _predict_glacier_timeseries(
         dh_col=dh_col,
         sigma_dh_col=sigma_dh_col,
         dt_col=dt_col,
-        past_dh_col=past_dh_col,
-        sigma_past_dh_col=sigma_past_dh_col,
+        past_dhdt_col=past_dhdt_col,
+        sigma_past_dhdt_col=sigma_past_dhdt_col,
         area_col=area_col,
         area_m2=area_m2,
     )
@@ -161,8 +161,8 @@ def _predict_glacier_timeseries(
                 dh=row.dh_m,
                 sigma_dh=row.sigma_dh_m,
                 dt=row.period_years,
-                past_dh=row.past_dh_m,
-                sigma_past_dh=row.sigma_past_dh_m,
+                past_dhdt=row.past_dhdt_m_yr,
+                sigma_past_dhdt=row.sigma_past_dhdt_m_yr,
                 area_m2=row.area_m2,
                 past_missing=past_missing,
                 past_error_factor=past_error_factor,
@@ -200,8 +200,8 @@ def _predict_glacier_timeseries(
         "period_years",
         "dh_m",
         "sigma_dh_m",
-        "past_dh_m",
-        "sigma_past_dh_m",
+        "past_dhdt_m_yr",
+        "sigma_past_dhdt_m_yr",
         "mu_rho_kg_m3",
         "sigma_rho_kg_m3",
     ]
@@ -252,8 +252,8 @@ def _prepare_input_table(
     dh_col: str | None,
     sigma_dh_col: str | None,
     dt_col: str | None,
-    past_dh_col: str | None,
-    sigma_past_dh_col: str | None,
+    past_dhdt_col: str | None,
+    sigma_past_dhdt_col: str | None,
     area_col: str | None,
     area_m2: float | None,
 ) -> pd.DataFrame:
@@ -268,9 +268,14 @@ def _prepare_input_table(
     start_col = start_col or _first_existing(columns, ["start", "start_year", "year0", "period_start"], required=False)
     end_col = end_col or _first_existing(columns, ["end", "end_year", "year1", "period_end"], required=False)
     dt_col = dt_col or _first_existing(columns, ["dt", "dt_yr", "period_years", "duration_yr"], required=False)
-    past_dh_col = past_dh_col or _first_existing(columns, ["past_dh_m", "past_dh", "dh_p_m", "dh_p"], required=False)
-    sigma_past_dh_col = sigma_past_dh_col or _first_existing(
-        columns, ["sigma_past_dh_m", "sig_past_dh_m", "sigma_dh_p_m"], required=False
+
+    # Prefer explicit rate units while accepting column names from earlier CSV files
+    past_dhdt_col = past_dhdt_col or _first_existing(
+        columns, ["past_dhdt_m_yr", "past_dhdt", "past_dh_m", "past_dh", "dh_p_m", "dh_p"], required=False
+    )
+    sigma_past_dhdt_col = sigma_past_dhdt_col or _first_existing(
+        columns, ["sigma_past_dhdt_m_yr", "sigma_past_dhdt", "sigma_past_dh_m", "sig_past_dh_m", "sigma_dh_p_m"],
+        required=False,
     )
     area_col = area_col or _first_existing(columns, ["area_m2", "area", "glacier_area_m2"], required=False)
     out = pd.DataFrame({"dh_m": pd.to_numeric(data[dh_col], errors="coerce")})
@@ -287,8 +292,8 @@ def _prepare_input_table(
         out["end"] = out["start"] + out["period_years"]
     else:
         raise KeyError("Input must contain start/end columns or a period length column")
-    out["past_dh_m"] = pd.to_numeric(data[past_dh_col], errors="coerce") if past_dh_col else np.nan
-    out["sigma_past_dh_m"] = pd.to_numeric(data[sigma_past_dh_col], errors="coerce") if sigma_past_dh_col else np.nan
+    out["past_dhdt_m_yr"] = pd.to_numeric(data[past_dhdt_col], errors="coerce") if past_dhdt_col else np.nan
+    out["sigma_past_dhdt_m_yr"] = pd.to_numeric(data[sigma_past_dhdt_col], errors="coerce") if sigma_past_dhdt_col else np.nan
     if area_col:
         out["area_m2"] = pd.to_numeric(data[area_col], errors="coerce")
     else:
@@ -300,7 +305,7 @@ def _prepare_input_table(
     finite_array(out["sigma_dh_m"], "sigma_dh_m", nonnegative=True)
     finite_array(out["period_years"], "period_years", positive=True)
     finite_array(out["area_m2"], "area_m2", positive=True)
-    for column in ("past_dh_m", "sigma_past_dh_m"):
+    for column in ("past_dhdt_m_yr", "sigma_past_dhdt_m_yr"):
         supplied = out[column].dropna()
         finite_array(supplied, column, nonnegative=column.startswith("sigma"))
     if out.duplicated(["start", "end"]).any():
@@ -403,8 +408,8 @@ def _expand_period_table(table: pd.DataFrame, corr: Callable[[np.ndarray], np.nd
                     "dh_m": dh,
                     "sigma_dh_m": sigma_dh,
                     "area_m2": float(observations["area_m2"].iloc[0]),
-                    "past_dh_m": float(observations["past_dh_m"].iloc[0]),
-                    "sigma_past_dh_m": float(observations["sigma_past_dh_m"].iloc[0]),
+                    "past_dhdt_m_yr": float(observations["past_dhdt_m_yr"].iloc[0]),
+                    "sigma_past_dhdt_m_yr": float(observations["sigma_past_dhdt_m_yr"].iloc[0]),
                 }
             )
     out = pd.DataFrame(rows)
@@ -466,7 +471,7 @@ def _attach_past_predictor(
 
     # Use the chosen assumption where earlier observations are missing, then average available history
     for idx, row in out.iterrows():
-        if pd.notna(row["past_dh_m"]) and pd.notna(row["sigma_past_dh_m"]):
+        if pd.notna(row["past_dhdt_m_yr"]) and pd.notna(row["sigma_past_dhdt_m_yr"]):
             continue
         past_mean = row["dh_m"] / row["period_years"] if past_missing == "current" else 0.0
         past_sigma = past_error_factor * row["sigma_dh_m"] / row["period_years"]
@@ -482,11 +487,11 @@ def _attach_past_predictor(
                 past_weights = np.zeros(len(elementary))
                 sources = ids[past_indices]
                 np.add.at(past_weights, sources, weights / elementary.loc[sources, "period_years"].to_numpy())
-        if pd.isna(row["past_dh_m"]):
-            out.loc[idx, "past_dh_m"] = past_mean
+        if pd.isna(row["past_dhdt_m_yr"]):
+            out.loc[idx, "past_dhdt_m_yr"] = past_mean
             history_weights[idx] = past_weights
-        if pd.isna(row["sigma_past_dh_m"]):
-            out.loc[idx, "sigma_past_dh_m"] = past_sigma
+        if pd.isna(row["sigma_past_dhdt_m_yr"]):
+            out.loc[idx, "sigma_past_dhdt_m_yr"] = past_sigma
     return out, history_weights
 
 
@@ -518,11 +523,11 @@ def _temporal_closure(model: RhoSurrogate, periods: pd.DataFrame) -> pd.DataFram
 ##################################
 
 
-def _broadcast_predictors(dh, sigma_dh, past_dh, sigma_past_dh, dt) -> tuple[np.ndarray, ...]:
+def _broadcast_predictors(dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt) -> tuple[np.ndarray, ...]:
     """Validate current elevation change and past elevation change rate and give them a common array shape."""
     return tuple(np.broadcast_arrays(
         finite_array(dh, "dh"), finite_array(sigma_dh, "sigma_dh", nonnegative=True),
-        finite_array(past_dh, "past_dh"), finite_array(sigma_past_dh, "sigma_past_dh", nonnegative=True),
+        finite_array(past_dhdt, "past_dhdt"), finite_array(sigma_past_dhdt, "sigma_past_dhdt", nonnegative=True),
         finite_array(dt, "dt", positive=True),
     ))
 
@@ -531,8 +536,8 @@ def integrated_mu_vectorized(
     model: RhoSurrogate,
     dh: np.ndarray,
     sigma_dh: np.ndarray,
-    past_dh: np.ndarray,
-    sigma_past_dh: np.ndarray,
+    past_dhdt: np.ndarray,
+    sigma_past_dhdt: np.ndarray,
     dt: np.ndarray,
 ) -> np.ndarray:
     """
@@ -545,19 +550,19 @@ def integrated_mu_vectorized(
     :param model: Effective density surrogate.
     :param dh: Elevation changes over the periods, in metres.
     :param sigma_dh: Standard deviations of elevation change in metres.
-    :param past_dh: Past elevation change rate in m yr-1.
-    :param sigma_past_dh: Standard deviations of the past elevation change rate in m yr-1.
+    :param past_dhdt: Past elevation change rate in m yr-1.
+    :param sigma_past_dhdt: Standard deviations of the past elevation change rate in m yr-1.
     :param dt: Period lengths in years.
     :returns: Effective densities in kg m-3, with NaN where dh is zero.
     """
 
     params = model.params
-    predictors = _broadcast_predictors(dh, sigma_dh, past_dh, sigma_past_dh, dt)
+    predictors = _broadcast_predictors(dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt)
     shape = predictors[0].shape
-    dh, sigma_dh, past_dh, sigma_past_dh, dt = [array.ravel() for array in predictors]
+    dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt = [array.ravel() for array in predictors]
 
     # Average the two past elevation change rate terms before integrating current change
-    y = past_dh[:, None] + np.sqrt(2.0) * sigma_past_dh[:, None] * model._gh_x_past[None, :]
+    y = past_dhdt[:, None] + np.sqrt(2.0) * sigma_past_dhdt[:, None] * model._gh_x_past[None, :]
     signed_power = np.sum(
         model._gh_w_past[None, :] * _signed_abs_power(y, float(model.params["etaMem"])),
         axis=1,
@@ -651,7 +656,7 @@ def _propagate_input_uncertainty(
     """
     result = predictions.copy()
     result["sigma_dM_dh_kg"] = result["raw_sigma_dM_dh_kg"]
-    uncertain = (result["sigma_dh_m"] > 0) | (result["sigma_past_dh_m"] > 0)
+    uncertain = (result["sigma_dh_m"] > 0) | (result["sigma_past_dhdt_m_yr"] > 0)
 
     # Reuse uncertain observations in dated time series, including disconnected periods
     if len(result) > 1 and observations.attrs["has_time_bounds"] and uncertain.any():
@@ -705,7 +710,7 @@ def _sample_reconciled_mass(
     # Separate reused observations from additional uncertainty in the past rate
     history_variance = np.einsum("pi,ij,pj->p", history_weights, covariance, history_weights)
     history_sigma = np.sqrt(np.maximum(history_variance, 0.0))
-    past_sigma = predictions["sigma_past_dh_m"].to_numpy()
+    past_sigma = predictions["sigma_past_dhdt_m_yr"].to_numpy()
     history_scale = np.ones(len(predictions))
     np.divide(past_sigma, history_sigma, out=history_scale, where=history_sigma > 0)
     history_scale = np.minimum(history_scale, 1.0)
@@ -739,7 +744,7 @@ def _sample_reconciled_mass(
     past_errors = (observation_errors @ history_weights.T) * history_scale
     extra = extra_sigma > 0
     past_errors[:, extra] += standard_draws[:, len(observations) + extra_columns[extra]] * extra_sigma[extra]
-    sampled_past = predictions["past_dh_m"].to_numpy() + past_errors
+    sampled_past = predictions["past_dhdt_m_yr"].to_numpy() + past_errors
 
     # Convert sampled current and past elevation changes to mass changes
     areas = predictions["area_m2"].to_numpy()
@@ -781,8 +786,8 @@ def _sample_reconciled_mass(
 
 def _past_term_moments_vectorized(
     model: RhoSurrogate,
-    past_dh: np.ndarray,
-    sigma_past_dh: np.ndarray,
+    past_dhdt: np.ndarray,
+    sigma_past_dhdt: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Calculate means, variances and covariance of the two past elevation change rate terms.
@@ -790,7 +795,7 @@ def _past_term_moments_vectorized(
     Centering terms before squaring preserves small predictor uncertainties.
     We reuse these five moments at every current integration point.
     """
-    y = past_dh[:, None] + np.sqrt(2.0) * sigma_past_dh[:, None] * model._gh_x_past[None, :]
+    y = past_dhdt[:, None] + np.sqrt(2.0) * sigma_past_dhdt[:, None] * model._gh_x_past[None, :]
     weights = model._gh_w_past[None, :] / np.sqrt(np.pi)
 
     # Center the terms so small variances do not subtract large squared means
@@ -811,8 +816,8 @@ def mean_density_volume_moments_vectorized(
     area_m2: np.ndarray,
     dh: np.ndarray,
     sigma_dh: np.ndarray,
-    past_dh: np.ndarray,
-    sigma_past_dh: np.ndarray,
+    past_dhdt: np.ndarray,
+    sigma_past_dhdt: np.ndarray,
     dt: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -829,26 +834,26 @@ def mean_density_volume_moments_vectorized(
     :param area_m2: Glacier areas in square metres.
     :param dh: Measured current elevation changes in metres.
     :param sigma_dh: Current elevation change standard deviations in metres.
-    :param past_dh: Past elevation change rate in m yr-1.
-    :param sigma_past_dh: Past elevation change rate standard deviations in m yr-1.
+    :param past_dhdt: Past elevation change rate in m yr-1.
+    :param sigma_past_dhdt: Past elevation change rate standard deviations in m yr-1.
     :param dt: Period lengths in years.
     :returns: Expected mass change in kg and its variance in kg2, in that order.
     """
 
-    predictors = _broadcast_predictors(dh, sigma_dh, past_dh, sigma_past_dh, dt)
-    area_m2, dh, sigma_dh, past_dh, sigma_past_dh, dt = np.broadcast_arrays(
+    predictors = _broadcast_predictors(dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt)
+    area_m2, dh, sigma_dh, past_dhdt, sigma_past_dhdt, dt = np.broadcast_arrays(
         finite_array(area_m2, "area_m2", positive=True), *predictors,
     )
     shape = dh.shape
     area = area_m2.ravel()
     dh = dh.ravel()
     sigma_dh = sigma_dh.ravel()
-    past_dh = past_dh.ravel()
-    sigma_past_dh = sigma_past_dh.ravel()
+    past_dhdt = past_dhdt.ravel()
+    sigma_past_dhdt = sigma_past_dhdt.ravel()
     dt = dt.ravel()
 
     params = model.params
-    past_moments = _past_term_moments_vectorized(model, past_dh, sigma_past_dh)
+    past_moments = _past_term_moments_vectorized(model, past_dhdt, sigma_past_dhdt)
     mean_power, mean_tanh, variance_power, variance_tanh, covariance = past_moments
 
     # Evaluate current nodes using past elevation change rate moments instead of every pair of quadrature nodes
@@ -879,7 +884,7 @@ def mean_density_volume_moments_vectorized(
     centered_mass = conditional_mass - mean_mass_per_area[:, None]
     variance_over_area2 = np.sum(weights_x * (variance_density_at_nodes * x**2 + centered_mass**2), axis=1)
     variance_over_area2 = np.maximum(variance_over_area2, 0.0)
-    deterministic = (sigma_dh == 0) & (sigma_past_dh == 0)
+    deterministic = (sigma_dh == 0) & (sigma_past_dhdt == 0)
     variance_over_area2[deterministic] = 0.0
 
     # Restore glacier area and the original broadcast input shape
@@ -893,8 +898,8 @@ def mean_density_volume_sigma_vectorized(
     area_m2: np.ndarray,
     dh: np.ndarray,
     sigma_dh: np.ndarray,
-    past_dh: np.ndarray,
-    sigma_past_dh: np.ndarray,
+    past_dhdt: np.ndarray,
+    sigma_past_dhdt: np.ndarray,
     dt: np.ndarray,
 ) -> np.ndarray:
     """
@@ -907,8 +912,8 @@ def mean_density_volume_sigma_vectorized(
     :param area_m2: Glacier areas in square metres.
     :param dh: Measured current elevation changes in metres.
     :param sigma_dh: Current elevation change standard deviations in metres.
-    :param past_dh: Past elevation change rate in m yr-1.
-    :param sigma_past_dh: Past elevation change rate standard deviations in m yr-1.
+    :param past_dhdt: Past elevation change rate in m yr-1.
+    :param sigma_past_dhdt: Past elevation change rate standard deviations in m yr-1.
     :param dt: Period lengths in years.
     :returns: Mass change standard deviations in kg, with the broadcast input shape.
     """
@@ -918,8 +923,8 @@ def mean_density_volume_sigma_vectorized(
         area_m2=area_m2,
         dh=dh,
         sigma_dh=sigma_dh,
-        past_dh=past_dh,
-        sigma_past_dh=sigma_past_dh,
+        past_dhdt=past_dhdt,
+        sigma_past_dhdt=sigma_past_dhdt,
         dt=dt,
     )
     return np.sqrt(np.maximum(variance, 0.0))

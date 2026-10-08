@@ -31,16 +31,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dh", type=float, help="Elevation change over the observation period in metres")
     parser.add_argument("--sigma-dh", type=float, default=0.0, help="Elevation change uncertainty in metres")
     parser.add_argument("--dt", type=float, help="Observation period duration in years; required with --dh")
-    parser.add_argument("--past-dh", type=float, default=None, help="Past elevation change rate in m yr-1")
-    parser.add_argument("--sigma-past-dh", type=float, default=None, help="Past elevation change rate uncertainty in m yr-1")
+    parser.add_argument("--past-dhdt", type=float, default=None, help="Past elevation change rate in m yr-1")
+    parser.add_argument("--sigma-past-dhdt", type=float, default=None, help="Past elevation change rate uncertainty in m yr-1")
     parser.add_argument("--area-m2", type=float, default=None, help="Constant glacier area in square metres")
     parser.add_argument("--start-col", default=None, help="Input column for the observation start year")
     parser.add_argument("--end-col", default=None, help="Input column for the observation end year")
     parser.add_argument("--dt-col", default=None, help="Input period duration column")
     parser.add_argument("--dh-col", default=None, help="Input elevation change column")
     parser.add_argument("--sigma-dh-col", default=None, help="Input elevation change uncertainty column")
-    parser.add_argument("--past-dh-col", default=None, help="Input past elevation change rate column")
-    parser.add_argument("--sigma-past-dh-col", default=None, help="Input past elevation change rate uncertainty column")
+    parser.add_argument("--past-dhdt-col", default=None, help="Input past elevation change rate column")
+    parser.add_argument("--sigma-past-dhdt-col", default=None, help="Input past elevation change rate uncertainty column")
     parser.add_argument("--area-col", default=None, help="Input area column")
     parser.add_argument(
         "--past-missing",
@@ -94,8 +94,8 @@ def main(argv: list[str] | None = None) -> int:
             dh=args.dh,
             sigma_dh=args.sigma_dh,
             dt=args.dt,
-            past_dh=args.past_dh,
-            sigma_past_dh=args.sigma_past_dh,
+            past_dhdt=args.past_dhdt,
+            sigma_past_dhdt=args.sigma_past_dhdt,
             area_m2=args.area_m2,
             past_missing=args.past_missing,
             past_error_factor=args.past_error_factor,
@@ -121,8 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         dh_col=args.dh_col,
         sigma_dh_col=args.sigma_dh_col,
         dt_col=args.dt_col,
-        past_dh_col=args.past_dh_col,
-        sigma_past_dh_col=args.sigma_past_dh_col,
+        past_dhdt_col=args.past_dhdt_col,
+        sigma_past_dhdt_col=args.sigma_past_dhdt_col,
         area_col=args.area_col,
         area_m2=args.area_m2,
         expand_periods=not args.no_expand_periods,

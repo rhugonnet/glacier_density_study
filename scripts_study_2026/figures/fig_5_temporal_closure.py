@@ -193,15 +193,15 @@ def apply_surrogate_and_closure(annual: pd.DataFrame, periods: pd.DataFrame, mod
     annual_wide = annual.pivot(index="rgiid", columns="start_date", values="signed_dh")
     past_parts = []
     for start in range(START_YEAR, END_YEAR):
-        part = past_elevation_change_from_wide(annual_wide, start, model).rename("dh_p_m").reset_index()
+        part = past_elevation_change_from_wide(annual_wide, start, model).rename("past_dhdt_m_yr").reset_index()
         part["start_date"] = float(start)
         past_parts.append(part)
     past = pd.concat(past_parts, ignore_index=True)
     out = periods.merge(past, on=["rgiid", "start_date"], how="left", validate="many_to_one")
-    out["dh_p_m"] = out["dh_p_m"].fillna(0.0)
+    out["past_dhdt_m_yr"] = out["past_dhdt_m_yr"].fillna(0.0)
     out["mu_rho_ind_kg_m3"] = model.mu_rho(
         out["signed_dh"].to_numpy(float),
-        dh_p=out["dh_p_m"].to_numpy(float),
+        past_dhdt=out["past_dhdt_m_yr"].to_numpy(float),
         dt=out["period_years"].to_numpy(float),
     )
     out["sigma_rho_ind_kg_m3"] = model.sigma_rho(out["signed_dh"].to_numpy(float), dt=out["period_years"].to_numpy(float))
@@ -372,7 +372,7 @@ def build_periods(annual: pd.DataFrame, model: RhoSurrogate, area_m2: float) -> 
             sigma_dh = float(np.sqrt(np.sum(sigma_annual[i0:i1] ** 2)))
             dh_p = 0.0 if i0 == 0 else float(np.mean(dh_obs[max(0, i0 - 5): i0]))
             dv = area_m2 * dh
-            mu = model.integrated_mu(dh=dh, sigma_dh=sigma_dh, dh_p=dh_p, sigma_dh_p=0.0, dt=dt)
+            mu = model.integrated_mu(dh=dh, sigma_dh=sigma_dh, past_dhdt=dh_p, sigma_past_dhdt=0.0, dt=dt)
             sigma_rho, sigma_dM = model.integrated_sigma_equiv_density(dh=dh, sigma_dh=sigma_dh, dt=dt, area_m2=area_m2)
             rows.append({"i0": i0, "i1": i1, "year0": int(years0[i0]), "year1": int(years0[i1 - 1] + 1), "dt_yr": dt, "dh_obs_m": dh, "dV_m3": dv, "mu_rho_ind_kg_m3": mu, "sigma_rho_ind_kg_m3": sigma_rho, "sigma_dM_rho_ind_kg": sigma_dM, "dM_ind_kg": mu * dv, "b_ind_kg": (mu - model.rho_ice) * dv})
     return pd.DataFrame(rows)

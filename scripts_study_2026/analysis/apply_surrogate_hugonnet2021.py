@@ -179,7 +179,7 @@ def fill_nodata_with_region_period_mean(periods: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def attach_past_dh(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
+def attach_past_dhdt(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
     """Calculate past elevation change rate from rates over five years."""
     out = periods.copy()
     tau = float(model.params["memory_tau_years"])
@@ -219,14 +219,14 @@ def attach_past_dh(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFrame:
             else:
                 vals = rate.get(start, pd.Series(np.nan, index=rate.index))
                 sigs = rate_sig.get(start, pd.Series(np.nan, index=rate_sig.index))
-        tmp = pd.DataFrame({"rgiid": rate.index, "start_year": start, "past_dh_m": vals.to_numpy(float), "sigma_past_dh_m": sigs.to_numpy(float)})
+        tmp = pd.DataFrame({"rgiid": rate.index, "start_year": start, "past_dhdt_m_yr": vals.to_numpy(float), "sigma_past_dhdt_m_yr": sigs.to_numpy(float)})
         past_tables.append(tmp)
     past_df = pd.concat(past_tables, ignore_index=True)
     out = out.merge(past_df, on=["rgiid", "start_year"], how="left")
     fallback = out["dh_m"] / out["period_years"]
     fallback_sig = out["sigma_dh_m"] / out["period_years"]
-    out["past_dh_m"] = out["past_dh_m"].fillna(fallback)
-    out["sigma_past_dh_m"] = out["sigma_past_dh_m"].fillna(fallback_sig)
+    out["past_dhdt_m_yr"] = out["past_dhdt_m_yr"].fillna(fallback)
+    out["sigma_past_dhdt_m_yr"] = out["sigma_past_dhdt_m_yr"].fillna(fallback_sig)
     return out
 
 
@@ -237,7 +237,7 @@ def build_elevation_change_cache(model: RhoSurrogate) -> pd.DataFrame:
         print(f"[read] {group}: {path.name}", flush=True)
         endpoints = load_endpoint_table(group, path)
         periods = build_periods(endpoints)
-        periods = attach_past_dh(periods, model)
+        periods = attach_past_dhdt(periods, model)
         all_periods.append(periods)
     periods = pd.concat(all_periods, ignore_index=True)
     periods["past_dh_method"] = PAST_DH_METHOD
@@ -257,7 +257,16 @@ def read_or_build_elevation_changes(model: RhoSurrogate, rebuild_cache: bool = F
                 print("[rebuild] Cached elevation-change table uses an older past-dh method.", flush=True)
                 return build_elevation_change_cache(model)
             print(f"[read] Cached elevation-change table: {OUT_ELEVATION_CACHE}", flush=True)
-            return pd.read_csv(OUT_ELEVATION_CACHE, low_memory=False)
+            cached = pd.read_csv(OUT_ELEVATION_CACHE, low_memory=False)
+
+            # Read existing rate columns without rebuilding or rewriting the saved cache
+            for old_column, new_column in (
+                ("past_dh_m", "past_dhdt_m_yr"),
+                ("sigma_past_dh_m", "sigma_past_dhdt_m_yr"),
+            ):
+                if new_column not in cached.columns:
+                    cached = cached.rename(columns={old_column: new_column})
+            return cached
         print("[rebuild] Cached elevation-change table lacks required method or uncertainty columns.", flush=True)
     return build_elevation_change_cache(model)
 
@@ -307,8 +316,8 @@ def apply_conversions(periods: pd.DataFrame, model: RhoSurrogate) -> pd.DataFram
             model,
             out["dh_m"].to_numpy(float)[sl],
             out["sigma_dh_m"].to_numpy(float)[sl],
-            out["past_dh_m"].to_numpy(float)[sl],
-            out["sigma_past_dh_m"].to_numpy(float)[sl],
+            out["past_dhdt_m_yr"].to_numpy(float)[sl],
+            out["sigma_past_dhdt_m_yr"].to_numpy(float)[sl],
             out["period_years"].to_numpy(float)[sl],
         )
         sigma[sl] = integrated_sigma_vectorized(
