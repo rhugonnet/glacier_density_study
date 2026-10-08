@@ -2,7 +2,7 @@
 
 Code for **Huss, Hugonnet, et al., _Converting glacier volume change to mass change: a global assessment_**. :world_map:
 
-This repository contains the study scripts and the surrogate model to predict glacier **effective density**, the quantity to convert glacier volume change to mass change:
+This repository contains **study scripts** to analyze outputs of the coupled model, and the surrogate model to predict glacier **effective density**, the quantity to convert glacier volume change to mass change:
 
 $$
 \rho_{\Delta V} = \frac{\Delta M}{\Delta V}.
