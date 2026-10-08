@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -29,6 +31,23 @@ def test_main__single_period_json(capsys) -> None:
     assert result["sigma_dM_dh_kg"] > 0
     assert result["sigma_dM_total_kg"] > result["sigma_dM_rho_kg"]
     assert result["sigma_dV_m3"] == 200_000
+
+
+def test_module__single_period_json() -> None:
+    """Checks that python -m glacier_density_surrogate prints the same prediction as the API."""
+
+    # Use the documented example to check the module entry point with the active interpreter
+    arguments = [
+        sys.executable, "-m", "glacier_density_surrogate",
+        "--dh", "-1.0", "--sigma-dh", "0.2", "--dt", "5", "--area-m2", "1000000",
+    ]
+    expected = RhoSurrogate().predict(dh=-1.0, sigma_dh=0.2, dt=5, area_m2=1_000_000)
+
+    # A successful process must emit a JSON prediction without extra output
+    process = subprocess.run(arguments, capture_output=True, text=True, check=True)
+    result = json.loads(process.stdout)
+    assert result == expected
+    assert process.stderr == ""
 
 
 @pytest.mark.parametrize("sigma_dh", ["0", "0.2"])

@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-study = [
+examples = [
   "cartopy",
   "matplotlib",
   "scipy",

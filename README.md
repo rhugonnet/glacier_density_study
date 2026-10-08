@@ -53,17 +53,38 @@ The package applies the surrogate model formulation as described in the **"Pract
 
 ### Setup surrogate environment
 
-Install the package from the repository root:
+Install directly from the GitHub repo (requires Python 3.10+ and Git):
 
 ```sh
-pip install -e .
+pip install git+https://github.com/rhugonnet/glacier_density_study.git
 ```
 
-To run the scripts in `examples/` or `tests/`, also install the optional dependencies:
+The installation should work on Windows, Linux and macOS with Python 3.10 and 3.14 (automatically checked in this repository).
+
+If installation fails, it is likely because you have conflicts with your global system Python.
+To solve these, create a separate Python environment before running ```pip install```. For example, with Conda:
 
 ```sh
-pip install -e ".[study,test]"
+conda create -n yourenvname -c conda-forge pip
+conda activate yourenvname
 ```
+
+Or with `venv` on Linux/macOS:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Or with Anaconda Navigator, create a Python 3.10+ environment via **Environments → Create**, then select **Open Terminal** beside its name and run the install command above.
+
+For development or to run the repository's examples and tests, clone it and install the optional dependencies:
+
+```sh
+pip install -e ".[examples,test]"
+```
+
+If you still have trouble installing, don't hesitate to open an issue on this repo!
 
 ### Quick use
 
