@@ -62,14 +62,16 @@ pip install git+https://github.com/rhugonnet/glacier_density_study.git
 The installation should work on Windows, Linux and macOS with Python 3.10 and 3.14 (automatically checked in this repository).
 
 If installation fails, it is likely because you have conflicts with your global system Python.
-To solve these, create a separate Python environment before running ```pip install```. For example, with Conda:
+To solve these, create a separate Python environment before running ```pip install```. 
+
+For example, with [Conda](https://continuumio-docs.readthedocs-hosted.com/miniconda/) installed as a package manager:
 
 ```sh
 conda create -n yourenvname -c conda-forge pip
 conda activate yourenvname
 ```
 
-Or with `venv` on Linux/macOS:
+Or with Python's native [venv](https://docs.python.org/3/library/venv.html) (on Linux/macOS):
 
 ```sh
 python3 -m venv .venv
