@@ -5,10 +5,14 @@ Estimate variance that we can attribute to firn parametrization sensitivity test
 This script refits the retained mean/sigma surrogate separately for the three firn density variants,
 then evaluates agreement between the final surrogate fitted to all variants at once, or a separate surrogate
 fitted only to a given variant.
+
+Use --uncertainty-only to reproduce the regional residual uncertainty share from
+existing fits. This writes each region's variance components and their median share.
 """
 
 from __future__ import annotations
 
+import argparse
 import gc
 import importlib.util
 import os
@@ -19,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from glacier_density_surrogate import RhoSurrogate
+from glacier_density_surrogate import RhoSurrogate, haversine_distance_matrix, integrated_sigma_mass_vectorized
 
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-cache")
@@ -65,6 +69,8 @@ OUT_COMPARISON_CSV = OUT_DIR / "pooled_vs_individual_unexplained_variance_compar
 OUT_PRIMARY_CSV = OUT_DIR / "firn_parametrization_unexplained_variance_percent.csv"
 OUT_FIT_SUMMARY_CSV = OUT_DIR / "individual_variant_fit_summary.csv"
 OUT_FIT_METADATA_CSV = OUT_DIR / "individual_variant_fit_metadata.csv"
+OUT_UNCERTAINTY_DETAIL_CSV = OUT_DIR / "firn_parametrization_regional_uncertainty_variance.csv"
+OUT_UNCERTAINTY_SUMMARY_CSV = OUT_DIR / "firn_parametrization_uncertainty_summary.csv"
 
 
 def load_script_module(path: Path, name: str):
@@ -445,6 +451,227 @@ def primary_variance_table(comparison: pd.DataFrame) -> pd.DataFrame:
     return primary.sort_values(["mode", "metric"]).reset_index(drop=True)
 
 
+###############################
+# REGIONAL RESIDUAL UNCERTAINTY
+###############################
+
+
+def read_common_uncertainty_inputs(agreement, model: RhoSurrogate, chunk_size: int = 500_000) -> pd.DataFrame:
+    """
+    Read a common glacier sample for the full observation period and its past elevation change rate.
+    """
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive")
+    start_year = agreement.START_YEAR
+    end_year = agreement.END_YEAR
+    reference_variant = VARIANTS[0]
+    history_years = int(round(float(model.params["tau_max"])))
+    columns = ["rgiid", "rho_variant", "start_date", "end_date", "rho", "b", "area", "lat", "lon"]
+    period_parts = []
+    annual_parts = []
+
+    # Select the full-period records and the reference history before filtering values
+    for chunk in pd.read_csv(INPUT_CSV, usecols=columns, chunksize=chunk_size):
+        full_period = chunk.start_date.eq(start_year) & chunk.end_date.eq(end_year)
+        annual_history = (
+            chunk.rho_variant.eq(reference_variant)
+            & (chunk.end_date - chunk.start_date).eq(1)
+            & chunk.start_date.lt(start_year)
+            & chunk.start_date.ge(start_year - history_years)
+        )
+        selected = chunk.loc[(full_period | annual_history) & chunk.rho_variant.isin(VARIANTS)].copy()
+        if selected.empty:
+            continue
+
+        # Apply the same density sentinels and finite-input rules as the agreement diagnostic
+        valid = (
+            np.isfinite(selected[["rho", "b", "area"]]).all(axis=1)
+            & selected.area.gt(0)
+            & selected.rho.abs().gt(1.0e-6)
+            & ~selected.rho.isin(agreement.RHO_SENTINELS)
+        )
+        selected = selected.loc[valid].copy()
+        selected["period_years"] = selected.end_date - selected.start_date
+        selected["signed_dh"] = selected.period_years * selected.b / selected.rho
+        selected = selected.loc[np.isfinite(selected.signed_dh)]
+        period_parts.append(selected.loc[selected.start_date.eq(start_year) & selected.end_date.eq(end_year)])
+        annual_parts.append(selected.loc[selected.end_date.lt(start_year + 1)])
+
+    # Match identifiers before selecting predictors, so every variant has the same glaciers
+    if not period_parts or not annual_parts:
+        raise ValueError("No full-period records or annual history are available")
+    periods = pd.concat(period_parts, ignore_index=True)
+    by_variant = {}
+    for variant in VARIANTS:
+        table = periods.loc[periods.rho_variant.eq(variant)].copy()
+        if table.empty or table.rgiid.isna().any() or table.rgiid.duplicated().any():
+            raise ValueError(f"Full-period glacier records must be present and unique for {variant}")
+        by_variant[variant] = table.set_index("rgiid")
+    common_ids = by_variant[reference_variant].index
+    for variant in VARIANTS[1:]:
+        common_ids = common_ids.intersection(by_variant[variant].index, sort=False)
+    if common_ids.empty:
+        raise ValueError("Firn variants have no common full-period glaciers")
+
+    # Areas must describe the same glacier support in every full-model variant
+    reference = by_variant[reference_variant].loc[common_ids].reset_index()
+    for variant in VARIANTS[1:]:
+        areas = by_variant[variant].loc[common_ids, "area"].to_numpy(float)
+        if not np.allclose(areas, reference.area.to_numpy(float), rtol=1.0e-12, atol=1.0e-12):
+            raise ValueError("Glacier areas differ between firn variants")
+    annual = pd.concat(annual_parts, ignore_index=True)
+    annual = annual.loc[annual.rgiid.isin(common_ids)]
+    if annual.duplicated(["rgiid", "start_date"]).any():
+        raise ValueError("Annual reference records must be unique for each glacier and year")
+
+    # A single start year is sufficient because we evaluate one full observation period
+    reference = agreement.add_past_change(reference, annual, model, start_year, start_year + 1)
+    reference["rgi_region"] = pd.to_numeric(reference.rgiid.str.extract(r"RGI60-(\d+)")[0], errors="raise")
+    if reference.rgi_region.isna().any():
+        raise ValueError("Glacier identifiers must specify an RGI region")
+    return reference
+
+
+def regional_uncertainty_variance(
+    data: pd.DataFrame,
+    pooled: RhoSurrogate,
+    variant_models: dict[str, RhoSurrogate],
+    block_size: int = 400,
+) -> pd.DataFrame:
+    """
+    Separate residual uncertainty within firn variants from differences between their regional means.
+    """
+    required = {"rgiid", "rgi_region", "area", "lat", "lon", "signed_dh", "past_dh", "period_years"}
+    if not required.issubset(data.columns) or data.empty:
+        raise ValueError("Common glacier inputs are empty or missing required columns")
+    if block_size < 1 or len(variant_models) < 2:
+        raise ValueError("Use a positive block size and at least two firn variants")
+    numeric_columns = sorted(required - {"rgiid"})
+    if not np.isfinite(data[numeric_columns]).all().all():
+        raise ValueError("Common glacier inputs must be finite")
+    if data.rgiid.isna().any() or data.rgiid.duplicated().any():
+        raise ValueError("Common glacier identifiers must be present and unique")
+    if not data.area.gt(0).all() or not data.period_years.gt(0).all() or data.period_years.nunique() != 1:
+        raise ValueError("Glacier areas must be positive and all rows must share one positive period length")
+
+    # Store all model means and standard deviations on the same input support
+    model_names = ["pooled", *variant_models]
+    models = [pooled, *variant_models.values()]
+    records = []
+    for region, group in data.groupby("rgi_region", sort=True):
+        dh = group.signed_dh.to_numpy(float)
+        past = group.past_dh.to_numpy(float)
+        dt = group.period_years.to_numpy(float)
+        area_m2 = group.area.to_numpy(float) * 1.0e6
+        lat = group.lat.to_numpy(float)
+        lon = group.lon.to_numpy(float)
+        regional_means = []
+        sigma_columns = []
+        for model in models:
+            density_mean = model.mu_rho(dh, past_dhdt=past, dt=dt)
+            regional_means.append(float(np.sum(density_mean * dh * area_m2)))
+            sigma_mass = integrated_sigma_mass_vectorized(model, area_m2, dh, np.zeros_like(dh), dt)
+            density_floor_mass = float(model.params["sigma_numeric_floor"]) * np.abs(dh) * area_m2
+            sigma_columns.append(np.maximum(sigma_mass, density_floor_mass))
+
+        # Include each glacier's own variance once and covariance between different glaciers twice
+        support = np.column_stack(sigma_columns)
+        conditional_variances = np.zeros(len(models))
+        for first in range(0, len(group), block_size):
+            last = min(first + block_size, len(group))
+            distances = haversine_distance_matrix(lat[first:last], lon[first:last], lat, lon)
+            correlation = pooled.spatial_corr(distances)
+            correlation[np.arange(last - first), np.arange(first, last)] = 1.0
+            conditional_variances += np.sum(support[first:last] * (correlation @ support), axis=0)
+
+        # Equal scenario weights give the population variance of the alternative regional means
+        within_variance = float(np.mean(conditional_variances[1:]))
+        between_variance = float(np.var(regional_means[1:], ddof=0))
+        total_variance = within_variance + between_variance
+        share_percent = 100.0 * between_variance / total_variance if total_variance > 0 else np.nan
+        record = {
+            "rgi_region": int(region),
+            "n_glaciers": len(group),
+            "area_km2": float(group.area.sum()),
+            "period_years": float(dt[0]),
+            "n_variants": len(variant_models),
+            "within_variant_residual_variance_kg2": within_variance,
+            "between_variant_mean_variance_kg2": between_variance,
+            "total_residual_uncertainty_variance_kg2": total_variance,
+            "firn_share_of_residual_uncertainty_percent": share_percent,
+            "pooled_residual_variance_kg2": float(conditional_variances[0]),
+        }
+        for index, name in enumerate(model_names):
+            record[f"{name}_mean_mass_change_kg"] = regional_means[index]
+            record[f"{name}_conditional_variance_kg2"] = float(conditional_variances[index])
+        records.append(record)
+    return pd.DataFrame(records)
+
+
+def uncertainty_variance_summary(detail: pd.DataFrame) -> pd.DataFrame:
+    """
+    Summarize the firn share of the regional residual uncertainty budget for the paper.
+    """
+    shares = detail["firn_share_of_residual_uncertainty_percent"]
+    if detail.empty or not np.isfinite(shares).all() or detail.rgi_region.duplicated().any():
+        raise ValueError("Each region must have one finite firn uncertainty share")
+    return pd.DataFrame([{
+        "statistic": "median_firn_share_of_regional_residual_uncertainty_percent",
+        "value_percent": float(shares.median()),
+        "minimum_percent": float(shares.min()),
+        "maximum_percent": float(shares.max()),
+        "n_regions": len(detail),
+        "n_glaciers": int(detail.n_glaciers.sum()),
+        "denominator": "mean_within_variant_residual_variance_plus_between_variant_mean_variance",
+        "full_model_variance_denominator": False,
+        "variant_weights": "equal",
+        "spatial_correlations": "pooled",
+        "temporal_reconciliation": False,
+        "elevation_measurement_uncertainty": False,
+    }])
+
+
+def run_uncertainty_analysis(output_dir: Path = OUT_DIR) -> dict[str, Path]:
+    """
+    Reproduce the paper's regional firn uncertainty share using existing fitted parameters.
+    """
+    agreement = load_script_module(STUDY_DIR / "analysis" / "surrogate_full_model_agreement.py", "agreement_uncertainty")
+    pooled = RhoSurrogate.from_files(PARAM_PATH, SPATIAL_PARAM_PATH, TEMPORAL_PARAM_PATH)
+    variant_models = {}
+    for variant in VARIANTS:
+        parameter_path = FIT_DIR / variant / "mu_sigma_model_parameters.csv"
+        model = RhoSurrogate.from_files(parameter_path)
+        for name in ["memory_tau_years", "tau_max", "rho_ice_fixed", "sigma_numeric_floor"]:
+            if model.params[name] != pooled.params[name]:
+                raise ValueError(f"The regional uncertainty comparison requires a shared {name}")
+        variant_models[variant] = model
+
+    # Rebuild the same sample and predictors from the source data rather than saved row samples
+    data = read_common_uncertainty_inputs(agreement, pooled)
+    print(f"[uncertainty] Matched {len(data):,} glaciers for {agreement.START_YEAR:g}-{agreement.END_YEAR:g}", flush=True)
+    detail = regional_uncertainty_variance(data, pooled, variant_models)
+    summary = uncertainty_variance_summary(detail)
+    summary["start_year"] = agreement.START_YEAR
+    summary["end_year"] = agreement.END_YEAR
+    summary["reference_variant"] = VARIANTS[0]
+    summary["input_csv"] = str(INPUT_CSV)
+    summary["pooled_parameter_path"] = str(PARAM_PATH)
+    summary["spatial_parameter_path"] = str(SPATIAL_PARAM_PATH)
+    for variant in VARIANTS:
+        summary[f"{variant}_parameter_path"] = str(FIT_DIR / variant / "mu_sigma_model_parameters.csv")
+
+    # Save the numerator and denominator for every region alongside the paper's aggregate
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    detail_path = output_dir / OUT_UNCERTAINTY_DETAIL_CSV.name
+    summary_path = output_dir / OUT_UNCERTAINTY_SUMMARY_CSV.name
+    detail.to_csv(detail_path, index=False)
+    summary.to_csv(summary_path, index=False)
+    value = float(summary.loc[0, "value_percent"])
+    print(f"[uncertainty] Median firn share of regional residual uncertainty variance: {value:.6f}%", flush=True)
+    return {"uncertainty_detail": detail_path, "uncertainty_summary": summary_path}
+
+
 def run() -> dict[str, Path]:
     """Run per-variant fits, agreement cases, and comparison summaries."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -513,8 +740,23 @@ def run() -> dict[str, Path]:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Compare pooled and variant-specific firn surrogate fits.")
+    parser.add_argument(
+        "--uncertainty-only", action="store_true",
+        help="Reproduce the regional residual uncertainty share using existing fits, without refitting.",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=None,
+        help="Output directory for --uncertainty-only; defaults to the firn diagnostic directory.",
+    )
+    args = parser.parse_args()
+    if args.output_dir is not None and not args.uncertainty_only:
+        parser.error("--output-dir requires --uncertainty-only")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        outputs = run()
+        if args.uncertainty_only:
+            outputs = run_uncertainty_analysis(args.output_dir if args.output_dir is not None else OUT_DIR)
+        else:
+            outputs = run()
     for name, path in outputs.items():
         print(f"[done] {name}: {path}", flush=True)
